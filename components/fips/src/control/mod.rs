@@ -1,0 +1,346 @@
+//! Control socket for runtime management and observability.
+//!
+//! Provides a control interface that accepts commands and returns
+//! structured JSON responses. Supports both read-only queries (show_*)
+//! and mutating commands (connect, disconnect).
+//!
+//! Platform-specific implementations:
+//! - Unix: Uses a Unix domain socket for local IPC
+//! - Windows: Uses a TCP socket on localhost (see commit 3)
+
+pub mod commands;
+pub mod firewall_state;
+pub mod listening;
+pub mod probe;
+pub mod protocol;
+pub mod queries;
+pub mod read_handle;
+pub mod snapshot;
+
+use crate::config::ControlConfig;
+use protocol::{Request, Response};
+use read_handle::{ControlReadHandle, snapshot_dispatch};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::sync::{mpsc, oneshot};
+use tracing::{debug, info, warn};
+
+/// Maximum request size in bytes (4 KB).
+const MAX_REQUEST_SIZE: usize = 4096;
+
+/// I/O timeout for client connections.
+const IO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// A message sent from the accept loop to the main event loop.
+pub type ControlMessage = (Request, oneshot::Sender<Response>);
+
+/// Handle a single client connection over any AsyncRead + AsyncWrite stream.
+///
+/// Shared between Unix and Windows implementations to avoid duplicating
+/// the request/response protocol logic.
+async fn handle_connection_generic<S>(
+    stream: S,
+    control_tx: mpsc::Sender<ControlMessage>,
+    read_handle: ControlReadHandle,
+) -> Result<(), Box<dyn std::error::Error>>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    let (reader, mut writer) = tokio::io::split(stream);
+    let mut buf_reader = BufReader::new(reader);
+    let mut line = String::new();
+
+    // Read one line with timeout and size limit
+    let read_result = tokio::time::timeout(IO_TIMEOUT, async {
+        let mut total = 0usize;
+        loop {
+            let n = buf_reader.read_line(&mut line).await?;
+            if n == 0 {
+                break; // EOF
+            }
+            total += n;
+            if total > MAX_REQUEST_SIZE {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "request too large",
+                ));
+            }
+            if line.ends_with('\n') {
+                break;
+            }
+        }
+        Ok(())
+    })
+    .await;
+
+    let response = match read_result {
+        Ok(Ok(())) if line.is_empty() => Response::error("empty request"),
+        Ok(Ok(())) => {
+            // Parse the request
+            match serde_json::from_str::<Request>(line.trim()) {
+                Ok(request) => {
+                    // First try to serve the request entirely off-loop from the
+                    // read handle. It returns None for any command with no snapshot
+                    // branch, and those fall through to the rx_loop path below.
+                    match snapshot_dispatch(&request, &read_handle) {
+                        Some(resp) => resp,
+                        None => {
+                            // Send to main loop and wait for response
+                            let (resp_tx, resp_rx) = oneshot::channel();
+                            if control_tx.send((request, resp_tx)).await.is_err() {
+                                Response::error("node shutting down")
+                            } else {
+                                match tokio::time::timeout(IO_TIMEOUT, resp_rx).await {
+                                    Ok(Ok(resp)) => resp,
+                                    Ok(Err(_)) => Response::error("response channel closed"),
+                                    Err(_) => Response::error("query timeout"),
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(e) => Response::error(format!("invalid request: {}", e)),
+            }
+        }
+        Ok(Err(e)) => Response::error(format!("read error: {}", e)),
+        Err(_) => Response::error("read timeout"),
+    };
+
+    // Write response with timeout
+    let json = serde_json::to_string(&response)?;
+    let write_result = tokio::time::timeout(IO_TIMEOUT, async {
+        writer.write_all(json.as_bytes()).await?;
+        writer.write_all(b"\n").await?;
+        writer.shutdown().await?;
+        Ok::<_, std::io::Error>(())
+    })
+    .await;
+
+    if let Err(_) | Ok(Err(_)) = write_result {
+        debug!("Control socket write failed or timed out");
+    }
+
+    Ok(())
+}
+
+// ============================================================================
+// Unix implementation
+// ============================================================================
+
+#[cfg(unix)]
+mod unix_impl {
+    use super::*;
+    use std::path::{Path, PathBuf};
+    use tokio::net::UnixListener;
+
+    /// Control socket listener (Unix domain socket).
+    ///
+    /// Manages the Unix domain socket lifecycle: bind, accept, cleanup.
+    pub struct ControlSocket {
+        listener: UnixListener,
+        socket_path: PathBuf,
+    }
+
+    impl ControlSocket {
+        /// Bind a new control socket.
+        ///
+        /// Creates parent directories if needed, removes stale socket files,
+        /// and binds the Unix listener.
+        pub fn bind(config: &ControlConfig) -> Result<Self, std::io::Error> {
+            let socket_path = PathBuf::from(&config.socket_path);
+            let listener = crate::utils::sockbind::bind(&socket_path, "control")?;
+
+            info!(path = %socket_path.display(), "Control socket listening");
+
+            Ok(Self {
+                listener,
+                socket_path,
+            })
+        }
+
+        /// Run the accept loop, forwarding requests to the main event loop via mpsc.
+        ///
+        /// Each accepted connection is handled in a spawned task:
+        /// 1. Read one line of JSON (the request)
+        /// 2. Send (Request, oneshot::Sender) to the main loop
+        /// 3. Wait for the response via oneshot
+        /// 4. Write the response as one line of JSON
+        /// 5. Close the connection
+        pub(crate) async fn accept_loop(
+            self,
+            control_tx: mpsc::Sender<ControlMessage>,
+            read_handle: ControlReadHandle,
+        ) {
+            loop {
+                let (stream, _addr) = match self.listener.accept().await {
+                    Ok(conn) => conn,
+                    Err(e) => {
+                        warn!(error = %e, "Control socket accept failed");
+                        continue;
+                    }
+                };
+
+                let tx = control_tx.clone();
+                let handle = read_handle.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = handle_connection_generic(stream, tx, handle).await {
+                        debug!(error = %e, "Control connection error");
+                    }
+                });
+            }
+        }
+
+        /// Get the socket path.
+        pub fn socket_path(&self) -> &Path {
+            &self.socket_path
+        }
+
+        /// Clean up the socket file.
+        fn cleanup(&self) {
+            crate::utils::sockbind::cleanup(&self.socket_path, "control");
+        }
+    }
+
+    impl Drop for ControlSocket {
+        fn drop(&mut self) {
+            self.cleanup();
+        }
+    }
+}
+
+// ============================================================================
+// Windows implementation (TCP on localhost)
+// ============================================================================
+
+#[cfg(windows)]
+mod windows_impl {
+    use super::*;
+    use tokio::net::TcpListener;
+
+    /// Default TCP port for the control socket on Windows.
+    const DEFAULT_CONTROL_PORT: u16 = 21210;
+
+    /// Control socket listener (Windows TCP on localhost).
+    ///
+    /// On Windows, the control socket uses a TCP listener bound to
+    /// `127.0.0.1` since Windows does not support Unix domain sockets
+    /// reliably. Only localhost connections are accepted.
+    ///
+    /// Note: Unlike Unix domain sockets, TCP does not provide filesystem-level
+    /// ACLs. Any local user can connect to the control port. This is acceptable
+    /// for single-user Windows installations but should be documented.
+    pub struct ControlSocket {
+        listener: TcpListener,
+        port: u16,
+    }
+
+    impl ControlSocket {
+        /// Bind a TCP control socket on localhost.
+        ///
+        /// Parses the port from `config.socket_path` (which is a port number
+        /// string on Windows, e.g. "21210"). Falls back to the default port
+        /// with a warning if parsing fails.
+        pub fn bind(config: &ControlConfig) -> Result<Self, std::io::Error> {
+            let port: u16 = match config.socket_path.parse() {
+                Ok(p) => p,
+                Err(e) => {
+                    warn!(
+                        path = %config.socket_path,
+                        error = %e,
+                        default = DEFAULT_CONTROL_PORT,
+                        "Invalid control port, using default"
+                    );
+                    DEFAULT_CONTROL_PORT
+                }
+            };
+
+            let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+            let std_listener = std::net::TcpListener::bind(addr)?;
+            std_listener.set_nonblocking(true)?;
+            let listener = TcpListener::from_std(std_listener)?;
+
+            info!(port = port, "Control socket listening on localhost");
+
+            Ok(Self { listener, port })
+        }
+
+        /// Get the listening port.
+        pub fn port(&self) -> u16 {
+            self.port
+        }
+
+        /// Run the accept loop, forwarding requests to the main event loop via mpsc.
+        ///
+        /// Each accepted connection is handled in a spawned task using the
+        /// shared `handle_connection_generic` protocol handler.
+        pub(crate) async fn accept_loop(
+            self,
+            control_tx: mpsc::Sender<ControlMessage>,
+            read_handle: ControlReadHandle,
+        ) {
+            loop {
+                let (stream, addr) = match self.listener.accept().await {
+                    Ok(conn) => conn,
+                    Err(e) => {
+                        warn!(error = %e, "Control socket accept failed");
+                        continue;
+                    }
+                };
+
+                // Only accept connections from localhost
+                if !addr.ip().is_loopback() {
+                    warn!(addr = %addr, "Rejected non-localhost control connection");
+                    continue;
+                }
+
+                let tx = control_tx.clone();
+                let handle = read_handle.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = handle_connection_generic(stream, tx, handle).await {
+                        debug!(error = %e, "Control connection error");
+                    }
+                });
+            }
+        }
+    }
+}
+
+// Re-export platform-specific types
+#[cfg(unix)]
+pub use unix_impl::ControlSocket;
+#[cfg(windows)]
+pub use windows_impl::ControlSocket;
+
+#[cfg(test)]
+mod tests {
+    #[cfg(windows)]
+    use super::*;
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn test_tcp_control_socket_bind() {
+        let config = ControlConfig {
+            enabled: true,
+            socket_path: "0".to_string(), // port 0 = ephemeral
+        };
+
+        // Verify the socket binds successfully on an ephemeral port
+        let _socket = ControlSocket::bind(&config).expect("failed to bind control socket");
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn test_tcp_control_socket_invalid_port_uses_default() {
+        let config = ControlConfig {
+            enabled: true,
+            socket_path: "not-a-port".to_string(),
+        };
+
+        // Should fall back to default port 21210. This may fail if 21210
+        // is already in use, which is acceptable for a unit test.
+        let result = ControlSocket::bind(&config);
+        // We mainly verify it doesn't panic on invalid input
+        if let Ok(socket) = result {
+            assert_eq!(socket.port(), 21210);
+        }
+    }
+}

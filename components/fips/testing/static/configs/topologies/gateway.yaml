@@ -1,0 +1,34 @@
+# Gateway Integration Test Topology
+#
+# Three FIPS nodes:
+#   a (gw-gateway)   — gateway with LAN interface
+#   b (gw-server)    — first mesh destination (LAN client #1 target)
+#   c (gw-server-2)  — second mesh destination (LAN client #2 target)
+#
+# Node `a` is directly peered with both `b` and `c`. Two distinct mesh
+# destinations are required so the gateway-test multi-client phase can
+# allocate distinct virtual-IP mappings (one per LAN client).
+#
+# A non-FIPS client container connects via the gateway's LAN interface.
+#
+# Uses deterministic key derivation (mesh-name: gateway-test).
+#
+# docker_host is the compose service's `hostname:`, which is what peers dial.
+# This is the one static topology whose hostnames are not node-<id>, so it is
+# the one that has to declare them.
+
+nodes:
+  a:
+    docker_ip: "172.20.0.10"
+    docker_host: "gw-gateway"
+    peers: [b, c]
+
+  b:
+    docker_ip: "172.20.0.11"
+    docker_host: "gw-server"
+    peers: [a]
+
+  c:
+    docker_ip: "172.20.0.12"
+    docker_host: "gw-server-2"
+    peers: [a]

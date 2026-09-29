@@ -1,0 +1,314 @@
+name: Linux Package
+on:
+  push:
+    branches:
+      - master
+      - maint
+      - next
+    tags:
+      - "v*"
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  determine-versioning:
+    runs-on: ubuntu-latest
+    outputs:
+      linux_package_version: ${{ steps.linux_version.outputs.linux_package_version }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+
+      - name: Derive Linux package version
+        id: linux_version
+        shell: bash
+        run: |
+          : ${GITHUB_OUTPUT:=/tmp/github_output}
+
+          BASE_VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            BRANCH=$(echo "$GITHUB_REF_NAME" | sed 's|[^A-Za-z0-9]|.|g; s/\.\.+/./g; s/^\.//; s/\.$//')
+            HEIGHT=$(git rev-list --count HEAD)
+            HASH=$(git rev-parse --short HEAD)
+            if [[ -z "$BRANCH" ]]; then
+              BRANCH="ref"
+            fi
+            VERSION="${BASE_VERSION}+${BRANCH}.${HEIGHT}.${HASH}"
+          fi
+
+          echo "linux_package_version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build Linux artifacts (${{ matrix.artifact_arch }})
+    runs-on: ${{ matrix.os }}
+    needs: determine-versioning
+
+    # Both legs build in the same pinned container. Nothing passes --platform,
+    # so the arm runner resolves the arm64 variant of the base image and builds
+    # natively; the floor check runs on that package too, so an aarch64 build
+    # above the floor fails the leg rather than shipping. What the runner
+    # supplies is Docker and the checkout -- neither leg compiles on the host.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact_arch: x86_64
+            deb_arch: amd64
+          - os: ubuntu-24.04-arm
+            artifact_arch: aarch64
+            deb_arch: arm64
+
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+
+      - name: Set SOURCE_DATE_EPOCH from git
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
+
+      # The host no longer compiles anything: the container carries the
+      # toolchain and the build dependencies. llvm is here only for llvm-strip,
+      # which build-tarball.sh uses on the binaries recovered from the package.
+      - name: Install host packaging tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends llvm
+
+      # The builder image travels between runners through the Actions cache,
+      # shared with ci.yml's package job (same script, same key), rather than
+      # being assembled from apt, rustup and a cargo-deb compile on every leg.
+      # It is keyed on the image tag the script computes, so any change that
+      # would rebuild the image locally (base image, toolchain,
+      # Dockerfile.build) also misses here and cannot pick up a stale image. Every run restores;
+      # only a push to maint, master or next saves, because the cache is
+      # scoped per ref and an entry saved by a pull request or a topic branch
+      # could be read by nothing else while it pushed the cargo caches toward
+      # the repository's size limit. Topic branches and pull requests read the
+      # default branch's entry. What this gives up: an image restored from the
+      # cache is not rebuilt, so, as on a developer's machine, apt and the
+      # ubuntu:22.04 base are not refreshed until one of the tag's inputs
+      # changes. The image carries build tools only, and the glibc floor and
+      # Depends checks still run on every package.
+      - name: Resolve the builder image cache key
+        id: builder
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag=$(bash packaging/debian/build-deb-container.sh --print-image-tag)
+          [ -n "$tag" ]
+          echo "key=deb-builder-${{ runner.arch }}-${tag//:/-}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the builder image
+        id: builder-restore
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ runner.temp }}/deb-builder-image.tar
+          key: ${{ steps.builder.outputs.key }}
+
+      # Build in the pinned container rather than on the runner. The runner's
+      # glibc is what put a GLIBC_2.39 requirement into every Linux artifact
+      # from v0.3.0 onward, so the package installed cleanly and then could not
+      # load on Debian 12 or Ubuntu 22.04. packaging/build-floor.env declares
+      # the base image and the floor; the script builds there and runs
+      # testing/check-glibc-floor.sh on the package it produced, so a build that
+      # would ship an unloadable binary fails here instead of at the user.
+      #
+      # This is the same script ci.yml and a local run call, so the package that
+      # passes the five-distro suite is built the way this one is.
+      - name: Build Debian package in the pinned container
+        id: deb
+        shell: bash
+        run: |
+          set -euo pipefail
+          : ${GITHUB_OUTPUT:=/tmp/github_output}
+
+          packaging/debian/build-deb-container.sh \
+            --version "${{ needs.determine-versioning.outputs.linux_package_version }}" \
+            --output-dir deploy \
+            --image-archive "$RUNNER_TEMP/deb-builder-image.tar" \
+            | tee /tmp/build-deb-container.log
+
+          # The script prints the package path as its last line of stdout.
+          # Only stdout is captured; its diagnostics go to stderr and straight
+          # to the job log, so nothing can land after the path.
+          DEB_FILE=$(tail -n 1 /tmp/build-deb-container.log)
+          if [[ ! -f "$DEB_FILE" ]]; then
+            echo "build-deb-container.sh did not name a package: '$DEB_FILE'" >&2
+            exit 1
+          fi
+          case "$DEB_FILE" in
+            *_${{ matrix.deb_arch }}.deb) ;;
+            *)
+              echo "Package $DEB_FILE is not ${{ matrix.deb_arch }}" >&2
+              exit 1
+              ;;
+          esac
+
+          # Record it relative to the checkout: upload-artifact derives the
+          # archive layout from the common ancestor of its paths, and an
+          # absolute path here would nest the package under directories the
+          # release job's dist/*.deb glob does not look in.
+          echo "deb=${DEB_FILE#"$PWD"/}" >> "$GITHUB_OUTPUT"
+
+      # On a cache miss the archive exists only if the script built the image
+      # and saved it, so its presence is what says there is something to save.
+      # A failed build skips this and the save, so no image is cached from a
+      # job that did not produce a package.
+      - name: Check for a new builder image archive
+        id: builder-archive
+        shell: bash
+        run: |
+          if [ -f "$RUNNER_TEMP/deb-builder-image.tar" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Save the builder image
+        if: >-
+          github.event_name == 'push'
+          && contains(fromJSON('["refs/heads/maint", "refs/heads/master", "refs/heads/next"]'), github.ref)
+          && steps.builder-restore.outputs.cache-hit != 'true'
+          && steps.builder-archive.outputs.present == 'true'
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ runner.temp }}/deb-builder-image.tar
+          key: ${{ steps.builder.outputs.key }}
+
+      # The container writes its target directory to a Docker volume, so the
+      # runner's target/release is empty. Recover the four binaries from the
+      # package instead: they are the container-built ones, so the tarball ships
+      # what the package ships rather than a second, runner-built set that the
+      # floor check never saw and that no package manager would refuse.
+      - name: Stage container-built binaries for the tarball
+        shell: bash
+        run: |
+          set -euo pipefail
+          UNPACK=$(mktemp -d)
+          dpkg-deb -x "${{ steps.deb.outputs.deb }}" "$UNPACK"
+          mkdir -p target/release
+          for bin in fips fipsctl fipstop fips-gateway; do
+            if [[ ! -f "$UNPACK/usr/bin/$bin" ]]; then
+              echo "Package is missing usr/bin/$bin" >&2
+              exit 1
+            fi
+            install -m 0755 "$UNPACK/usr/bin/$bin" "target/release/$bin"
+          done
+          rm -rf "$UNPACK"
+
+      - name: Build systemd tarball
+        env:
+          STRIP: llvm-strip
+        run: |
+          packaging/systemd/build-tarball.sh \
+            --version "${{ needs.determine-versioning.outputs.linux_package_version }}" \
+            --arch "${{ matrix.artifact_arch }}" \
+            --no-build
+
+      # The tarball has no package manager to refuse it, so nothing at install
+      # time would notice a bad floor. Check the binaries out of the finished
+      # tarball, after the strip, rather than trusting that they are the same
+      # objects the package check already passed.
+      - name: Check the tarball against the declared glibc floor
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARBALL="deploy/fips-${{ needs.determine-versioning.outputs.linux_package_version }}-linux-${{ matrix.artifact_arch }}.tar.gz"
+          UNPACK=$(mktemp -d)
+          tar -xzf "$TARBALL" -C "$UNPACK"
+          testing/check-glibc-floor.sh \
+            "$UNPACK"/*/fips \
+            "$UNPACK"/*/fipsctl \
+            "$UNPACK"/*/fipstop \
+            "$UNPACK"/*/fips-gateway
+          rm -rf "$UNPACK"
+
+      - name: Resolve Linux asset paths
+        id: linux-assets
+        shell: bash
+        run: |
+          : ${GITHUB_OUTPUT:=/tmp/github_output}
+
+          TARBALL="deploy/fips-${{ needs.determine-versioning.outputs.linux_package_version }}-linux-${{ matrix.artifact_arch }}.tar.gz"
+          if [[ ! -f "$TARBALL" ]]; then
+            echo "Missing tarball: $TARBALL" >&2
+            exit 1
+          fi
+
+          echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
+          echo "deb=${{ steps.deb.outputs.deb }}" >> "$GITHUB_OUTPUT"
+
+      - name: SHA-256 hashes
+        run: |
+          echo "==> Linux release assets:"
+          sha256sum \
+            "${{ steps.linux-assets.outputs.tarball }}" \
+            "${{ steps.linux-assets.outputs.deb }}"
+
+      - name: Upload artifact (GitHub only)
+        if: ${{ env.ACT != 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: fips_${{ needs.determine-versioning.outputs.linux_package_version }}_${{ matrix.artifact_arch }}_linux
+          path: |
+            ${{ steps.linux-assets.outputs.tarball }}
+            ${{ steps.linux-assets.outputs.deb }}
+          retention-days: 30
+
+      - name: Build Summary
+        run: |
+          echo "Build Summary for linux/${{ matrix.artifact_arch }}:"
+          echo "  Tarball: ${{ steps.linux-assets.outputs.tarball }}"
+          echo "  Debian:  ${{ steps.linux-assets.outputs.deb }}"
+
+  release:
+    name: Publish Linux assets to GitHub Release
+    runs-on: ubuntu-latest
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download Linux artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Generate Linux release checksums
+        run: |
+          cd dist
+          find . -maxdepth 1 -type f \( -name '*.deb' -o -name '*.tar.gz' \) -printf '%P\n' \
+            | LC_ALL=C sort \
+            | xargs sha256sum \
+            > checksums-linux.txt
+
+      - name: Wait for tag release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for attempt in $(seq 1 20); do
+            if gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+              exit 0
+            fi
+            echo "Release ${GITHUB_REF_NAME} not available yet; waiting..."
+            sleep 15
+          done
+
+          echo "Timed out waiting for release ${GITHUB_REF_NAME}" >&2
+          exit 1
+
+      - name: Upload Linux assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${GITHUB_REF_NAME}" \
+            dist/*.deb \
+            dist/*.tar.gz \
+            dist/checksums-linux.txt \
+            --clobber \
+            --repo "${GITHUB_REPOSITORY}"

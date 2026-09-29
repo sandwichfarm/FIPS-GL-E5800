@@ -1,0 +1,4 @@
+#!/bin/sh
+
+# Called by OpenWrt default_prerm before package files are removed.
+exit 0

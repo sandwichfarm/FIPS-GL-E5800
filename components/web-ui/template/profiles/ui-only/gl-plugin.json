@@ -1,0 +1,23 @@
+{
+  "$schema": "https://raw.githubusercontent.com/go-wombat/gl-sdk4-plugin-kit/main/schema/gl-plugin.schema.json",
+  "schemaVersion": 1,
+  "id": "__PLUGIN_ID__",
+  "profile": "ui-only",
+  "compatibility": {
+    "minimumFirmware": "4.8.0",
+    "requiredComponents": [
+      "gl-card",
+      "gl-title"
+    ],
+    "requiredCapabilities": []
+  },
+  "package": {
+    "name": "gl-sdk4-ui-__PLUGIN_ID__",
+    "architecture": "all",
+    "section": "base",
+    "depends": [
+      "libc",
+      "gl-sdk4-ui-core"
+    ]
+  }
+}

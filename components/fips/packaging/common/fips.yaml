@@ -1,0 +1,161 @@
+# FIPS Node Configuration
+
+node:
+  identity:
+    # By default, a new ephemeral keypair is generated on each start.
+    # Uncomment persistent to keep the same identity across restarts;
+    # on first start a keypair is saved to fips.key/fips.pub next to
+    # this config file (mode 0600/0644).
+    # persistent: true
+    #
+    # Or set an explicit key (overrides persistent):
+    # nsec: "nsec1..."
+  # Mesh-lookup protocol (node.lookup.*): the overlay coordinate-lookup engine
+  # (mesh address -> coordinates). Defaults shown; uncomment to override.
+  # lookup:
+  #   ttl: 64
+  #   attempt_timeouts_secs: [1, 2, 4, 8]
+  #   recent_expiry_secs: 10
+  #   backoff_base_secs: 0
+  #   backoff_max_secs: 0
+  #   forward_min_interval_secs: 2
+  rendezvous:
+    # Optional Nostr-mediated overlay endpoint rendezvous.
+    # nostr:
+    #   enabled: true
+    #   policy: configured_only  # disabled | configured_only | open
+    #   open_discovery_max_pending: 64 # caps queued open-rendezvous retries
+    #   app: "fips-overlay-v1"
+    #   advertise: true
+    #   advert_relays:
+    #     - "wss://relay.damus.io"
+    #     - "wss://nos.lol"
+    #     - "wss://offchain.pub"
+    #   dm_relays:
+    #     - "wss://relay.damus.io"
+    #     - "wss://nos.lol"
+    #     - "wss://offchain.pub"
+    #   # Optional override. If omitted, FIPS uses the built-in STUN list.
+    #   # Built-in relay/STUN defaults are best-effort and should be
+    #   # overridden by operators for production use.
+    #   stun_servers:
+    #     - "stun:stun.l.google.com:19302"
+    #     - "stun:stun.cloudflare.com:3478"
+    #     - "stun:global.stun.twilio.com:3478"
+    #
+    # Optional mDNS-based LAN rendezvous for sub-second same-LAN pairing.
+    # Opt-in (default false): default-off avoids a per-LAN identity
+    # broadcast on nodes that have deliberately disabled other rendezvous
+    # channels, and avoids any multicast surprise on upgrade. Requires an
+    # operational UDP transport (the advertised port is the one peers dial).
+    # lan:
+    #   enabled: false
+    #   # Optional application/network scope carried in the LAN-only TXT
+    #   # record. Browsers that set a scope ignore adverts for other scopes.
+    #   # Kept separate from the Nostr rendezvous `app` tag so relay-visible
+    #   # adverts can stay generic while LAN rendezvous stays per-private-network.
+    #   # scope: "lab-floor-3"
+    #   # Advanced: overrides the mDNS service type. Leave unset in normal
+    #   # use — only needed to run multiple isolated services on one
+    #   # interface (e.g. test isolation on loopback).
+    #   # service_type: "_fips._udp.local."
+
+tun:
+  enabled: true
+  name: fips0
+  mtu: 1280
+
+dns:
+  enabled: true
+  # bind_addr defaults to "::1" (IPv6 loopback). The shipped
+  # fips-dns-setup script configures systemd-resolved with a global
+  # /etc/systemd/resolved.conf.d/fips.conf drop-in pointing at
+  # [::1]:5354.
+  #
+  # Set "::" to expose the responder to mesh peers as well (e.g. for
+  # gateway hosts that resolve .fips on behalf of LAN clients). The
+  # mesh-interface filter in src/upper/dns.rs will still defend
+  # /etc/fips/hosts aliases from cross-mesh enumeration.
+  # bind_addr: "::1"
+  port: 5354
+
+transports:
+  udp:
+    bind_addr: "0.0.0.0:2121"
+    # advertise_on_nostr: true
+    # public: false # false => advertise udp:nat; true => advertise bound host:port
+    # accept_connections: true # default; refuse inbound msg1 when false
+    # outbound_only: false     # true => bind ephemeral, no listener on a
+    #                          # known port. Forces advertise_on_nostr=false
+    #                          # and accept_connections=false. Pure-client
+    #                          # posture; bind_addr is ignored.
+
+  tcp:
+    # Accepts inbound connections. No static outbound peers.
+    bind_addr: "0.0.0.0:8443"
+    # advertise_on_nostr: true
+
+  # Ethernet transport — uncomment and set your interface name.
+  # ethernet:
+  #   interface: "eth0"
+  #   listen: true
+  #   announce: true
+  #   auto_connect: true
+  #   accept_connections: true
+
+  # Bluetooth Low Energy transport: Linux (glibc) builds only, with BlueZ
+  # (bluetoothd) running. Not available on macOS, FreeBSD, Windows or OpenWrt.
+  # ble:
+  #   adapter: "hci0"
+  #   mtu: 2048
+  #   advertise: true
+  #   scan: true
+  #   auto_connect: true
+  #   accept_connections: true
+
+  # Nym transport — outbound-only connections through the Nym mixnet for
+  # sender/receiver privacy. This is a privacy posture, not a NAT-traversal
+  # or failover transport: it only dials out (no inbound listener) and is
+  # chosen for its anonymity properties. Requires a nym-socks5-client
+  # running separately as its own process; FIPS dials it over SOCKS5.
+  # nym:
+  #   socks5_addr: "127.0.0.1:1080"     # nym-socks5-client SOCKS5 address
+  #   connect_timeout_ms: 300000        # outbound connect timeout (300s);
+  #                                     # mixnet round-trips can take minutes
+  #   mtu: 1400                         # per-connection MTU
+  #   startup_timeout_secs: 120         # wait for nym-socks5-client readiness
+
+# Outbound LAN gateway. Allows non-FIPS hosts on the LAN to reach
+# mesh destinations via DNS-allocated virtual IPs and kernel NAT.
+# Requires: IPv6 forwarding enabled, fips daemon running with DNS.
+# gateway:
+#   enabled: true
+#   pool: "fd01::/112"
+#   lan_interface: "eth0"
+#   dns:
+#     listen: "[::1]:5365"
+#     # upstream must match the daemon's dns.bind_addr above. The
+#     # default "[::1]:5354" matches the daemon's default. If you set
+#     # the daemon to bind on a wildcard ("::") or specific address,
+#     # update upstream to match — explicit ::1 sockets do not accept
+#     # v4 traffic.
+#     upstream: "[::1]:5354"
+#     ttl: 60
+#   pool_grace_period: 60
+#   conntrack:
+#     tcp_established: 432000
+#     udp_timeout: 30
+#     udp_assured: 180
+#     icmp_timeout: 30
+
+peers: []
+  # Static peers for bootstrapping (UDP or TCP):
+  # - npub: "npub1qmc3cvfz0yu2hx96nq3gp55zdan2qclealn7xshgr448d3nh6lks7zel98"
+  #   alias: "gateway"
+  #   via_nostr: true
+  #   addresses:
+  #     - transport: udp
+  #       addr: "test-us01.fips.network:2121"  # IP or hostname (e.g., "peer.example.com:2121")
+  #     - transport: udp
+  #       addr: "nat"  # Use node.rendezvous.nostr for Nostr/STUN hole punching
+  #   connect_policy: auto_connect

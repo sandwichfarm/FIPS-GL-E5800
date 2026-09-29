@@ -1,0 +1,4 @@
+node_modules/
+dist/
+.glpluginrc.json
+.DS_Store

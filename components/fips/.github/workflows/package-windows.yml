@@ -1,0 +1,209 @@
+name: Windows Package
+on:
+  push:
+    branches:
+      - master
+      - maint
+      - next
+    tags:
+      - "v*"
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  determine-versioning:
+    runs-on: windows-latest
+    outputs:
+      package_version: ${{ steps.version.outputs.package_version }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+
+      - name: Derive package version
+        id: version
+        shell: pwsh
+        run: |
+          $cargoToml = Get-Content Cargo.toml -Raw
+          if ($cargoToml -match 'version\s*=\s*"([^"]+)"') {
+            $baseVersion = $Matches[1]
+          } else {
+            throw "Could not determine version from Cargo.toml"
+          }
+
+          if ($env:GITHUB_REF -like "refs/tags/*") {
+            $version = $env:GITHUB_REF_NAME -replace '^v', ''
+          } else {
+            $branch = $env:GITHUB_REF_NAME -replace '[^A-Za-z0-9]', '.' -replace '\.\.+', '.' -replace '^\.|\.$$', ''
+            $height = git rev-list --count HEAD
+            $hash = git rev-parse --short HEAD
+            if (-not $branch) { $branch = "ref" }
+            $version = "$baseVersion+$branch.$height.$hash"
+          }
+
+          echo "package_version=$version" >> $env:GITHUB_OUTPUT
+
+  build:
+    name: Build Windows package
+    runs-on: windows-latest
+    needs: determine-versioning
+
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+
+      - name: Set SOURCE_DATE_EPOCH from git
+        shell: pwsh
+        run: |
+          $epoch = git log -1 --format=%ct
+          echo "SOURCE_DATE_EPOCH=$epoch" >> $env:GITHUB_ENV
+
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          cache: false
+          rustflags: ''
+
+      - name: Cache Cargo registry + build
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: windows-release-x86_64-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            windows-release-x86_64-
+
+      - name: Build release binaries
+        run: cargo build --release
+
+      - name: Build Windows package
+        shell: pwsh
+        run: |
+          powershell -File packaging/windows/build-zip.ps1 `
+            -Version "${{ needs.determine-versioning.outputs.package_version }}" `
+            -NoBuild
+
+      - name: Verify ZIP structural correctness
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem deploy\fips-*-windows-*.zip | Select-Object -First 1
+          if (-not $zip) { Write-Error "No ZIP artifact found in deploy\"; exit 1 }
+          Write-Host "Verifying: $($zip.Name)"
+
+          $extractDir = "verify-extract"
+          if (Test-Path $extractDir) { Remove-Item -Recurse -Force $extractDir }
+          Expand-Archive -Path $zip.FullName -DestinationPath $extractDir
+
+          # Expected top-level files (flat ZIP, no wrapper directory).
+          # Source of truth: packaging/windows/build-zip.ps1
+          $expected = @(
+            "fips.exe",
+            "fipsctl.exe",
+            "fipstop.exe",
+            "fips.yaml",
+            "hosts",
+            "install-service.ps1",
+            "uninstall-service.ps1",
+            "README.txt"
+          )
+
+          $missing = @()
+          foreach ($f in $expected) {
+            $path = Join-Path $extractDir $f
+            if (Test-Path -LiteralPath $path -PathType Leaf) {
+              Write-Host "PASS: $f"
+            } else {
+              Write-Host "FAIL: $f"
+              $missing += $f
+            }
+          }
+
+          Write-Host ""
+          Write-Host "ZIP contents:"
+          Get-ChildItem -Path $extractDir -Recurse | ForEach-Object {
+            Write-Host "  $($_.FullName.Substring((Resolve-Path $extractDir).Path.Length + 1))"
+          }
+
+          if ($missing.Count -gt 0) {
+            Write-Error "Missing expected files: $($missing -join ', ')"
+            exit 1
+          }
+          Write-Host ""
+          Write-Host "All expected files present."
+
+      - name: SHA-256 hash
+        shell: pwsh
+        run: |
+          Write-Host "==> Windows release asset:"
+          Get-ChildItem deploy\fips-*-windows-*.zip | ForEach-Object {
+            Get-FileHash $_.FullName -Algorithm SHA256 | Format-Table -AutoSize
+          }
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: fips_${{ needs.determine-versioning.outputs.package_version }}_x86_64_windows
+          path: deploy/fips-*-windows-*.zip
+          retention-days: 30
+
+      - name: Build summary
+        shell: pwsh
+        run: |
+          $pkg = Get-ChildItem deploy\fips-*-windows-*.zip | Select-Object -First 1
+          Write-Host "Build Summary for Windows/x86_64:"
+          Write-Host "  Package: $($pkg.Name)"
+          Write-Host "  Size: $([math]::Round($pkg.Length / 1MB, 2)) MB"
+
+  release:
+    name: Publish Windows assets to GitHub Release
+    runs-on: ubuntu-latest
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download Windows artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Generate Windows release checksums
+        run: |
+          cd dist
+          find . -maxdepth 1 -type f -name '*.zip' -printf '%P\n' \
+            | LC_ALL=C sort \
+            | xargs sha256sum \
+            > checksums-windows.txt
+
+      - name: Wait for tag release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for attempt in $(seq 1 20); do
+            if gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+              exit 0
+            fi
+            echo "Release ${GITHUB_REF_NAME} not available yet; waiting..."
+            sleep 15
+          done
+
+          echo "Timed out waiting for release ${GITHUB_REF_NAME}" >&2
+          exit 1
+
+      - name: Upload Windows assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${GITHUB_REF_NAME}" \
+            dist/*.zip \
+            dist/checksums-windows.txt \
+            --clobber \
+            --repo "${GITHUB_REPOSITORY}"

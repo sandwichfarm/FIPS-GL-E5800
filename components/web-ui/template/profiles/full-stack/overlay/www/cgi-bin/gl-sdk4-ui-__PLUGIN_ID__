@@ -1,0 +1,40 @@
+#!/bin/sh
+
+case "${REQUEST_METHOD:-GET}" in
+	GET) ;;
+	*)
+		printf 'Status: 405 Method Not Allowed\r\n'
+		printf 'Allow: GET\r\n'
+		printf 'Content-Type: application/json\r\n\r\n'
+		printf '%s\n' '{"status":"error","error":"method_not_allowed"}'
+		exit 0
+		;;
+esac
+
+. /usr/libexec/__PLUGIN_ID__/admin-session.sh
+gl_sdk4_require_admin_session
+
+enabled_value='1'
+if command -v uci >/dev/null 2>&1; then
+	enabled_value="$(uci -q get __PLUGIN_ID__.main.enabled 2>/dev/null || printf '1')"
+fi
+
+case "$enabled_value" in
+	1|true|on|yes) enabled='true' ;;
+	*) enabled='false' ;;
+esac
+
+uptime_seconds='0'
+if [ -r /proc/uptime ]; then
+	read -r uptime_seconds _ < /proc/uptime
+	uptime_seconds="${uptime_seconds%%.*}"
+fi
+case "$uptime_seconds" in
+	''|*[!0-9]*) uptime_seconds='0' ;;
+esac
+
+printf 'Content-Type: application/json\r\n'
+printf 'Cache-Control: no-store\r\n'
+printf 'X-Content-Type-Options: nosniff\r\n\r\n'
+printf '{"status":"ok","backend":"shell-cgi","enabled":%s,"uptimeSeconds":%s}\n' \
+	"$enabled" "$uptime_seconds"

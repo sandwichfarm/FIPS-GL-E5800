@@ -1,0 +1,29 @@
+# FIPS directory-mode test — node B (outbound connector)
+#
+# Runs in socks5 mode: connects outbound to node A's .onion address
+# via the shared Tor daemon's SOCKS5 proxy. The .onion address and
+# npub are injected by the test script at runtime.
+
+node:
+  identity:
+    nsec: "{{NSEC_B}}"
+
+tun:
+  enabled: true
+  name: fips0
+  mtu: 1280
+
+dns:
+  enabled: true
+
+transports:
+  tor:
+    socks5_addr: "127.0.0.1:9050"
+
+peers:
+  - npub: "{{NPUB_A}}"
+    alias: "dir-a"
+    addresses:
+      - transport: tor
+        addr: "{{ONION_ADDR_A}}"
+    connect_policy: auto_connect

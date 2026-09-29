@@ -1,0 +1,14 @@
+{
+  "full-stack": {
+    "title": "Full-stack Reference",
+    "description": "This page calls a read-only shell backend installed by the same package.",
+    "backend": "Backend",
+    "configuration": "Configuration",
+    "uptime": "Router uptime",
+    "enabled": "Enabled",
+    "disabled": "Disabled",
+    "refresh": "Refresh",
+    "loading": "Calling the router backend...",
+    "failed": "The backend request failed"
+  }
+}

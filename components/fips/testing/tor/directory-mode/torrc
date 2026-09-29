@@ -1,0 +1,23 @@
+# Tor configuration for FIPS directory-mode integration test.
+# Uses HiddenServiceDir — Tor manages the onion service and key.
+#
+# NOTE: Sandbox 1 is omitted in Docker tests (requires specific seccomp
+# profiles and pre-existing directory ownership). Production deployments
+# on bare metal should enable Sandbox 1 per packaging/torrc.fips.
+
+# IsolateSOCKSAuth is required because FIPS uses SOCKS5 username/password
+# for per-destination circuit isolation.
+SocksPort 127.0.0.1:9050 IsolateSOCKSAuth
+
+# Onion service — Tor manages key and hostname file.
+HiddenServiceDir /var/lib/tor/fips_onion_service
+HiddenServicePort 8443 127.0.0.1:8443
+
+# Security hardening (subset safe for Docker)
+ExitRelay 0
+ExitPolicy reject *:*
+VanguardsLiteEnabled 1
+SafeLogging 1
+
+# Logging
+Log notice stderr

@@ -1,0 +1,5 @@
+- name: Restore community dashboard package
+  ansible.builtin.include_role:
+    name: package_restore
+  vars:
+    stack_component: device_ui

@@ -1,0 +1,31 @@
+{
+  "source": {
+    "model": "GL-MT3000",
+    "firmwares": ["4.8.1 release", "4.9.0 beta6"],
+    "contract": "challenge.alg selects Unix crypt (1, 5, or 6); login uses SHA-256(username:crypted:nonce)"
+  },
+  "username": "root",
+  "password": "test-password",
+  "salt": "saltsalt",
+  "nonce": "nonce123",
+  "vectors": [
+    {
+      "alg": "1",
+      "name": "md5-crypt",
+      "crypted": "$1$saltsalt$iuC5SYOeshqPu6qk/NmJn0",
+      "login_hash": "d4c2aaf6af8dbbf0e98233781f7d9866be75b6d67d384d32950466c7a64ddb2f"
+    },
+    {
+      "alg": "5",
+      "name": "sha256-crypt",
+      "crypted": "$5$saltsalt$Y/0k.HKElTP74ZOquf1zNDgE168/uYkTHay991KkTg1",
+      "login_hash": "15b31ec7a13f8df32e118f0dac9104483a5b9b3b287abd2af54f38a98896f713"
+    },
+    {
+      "alg": "6",
+      "name": "sha512-crypt",
+      "crypted": "$6$saltsalt$5hjZjOTTBmKDq91H1TYVCdSww7r5D//pW6mES4Zjy3t7YROXec9fdzEEs4GVes2XNraZ/dCBUV.jIbbscnbRI1",
+      "login_hash": "a28950854737ecb881c021ce42eb14b8b84a4ae6eda9f425d67530f2b33388bf"
+    }
+  ]
+}

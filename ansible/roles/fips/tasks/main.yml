@@ -1,0 +1,5 @@
+- name: Restore FIPS package
+  ansible.builtin.include_role:
+    name: package_restore
+  vars:
+    stack_component: fips

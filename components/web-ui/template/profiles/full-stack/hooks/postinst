@@ -1,0 +1,4 @@
+#!/bin/sh
+
+# Called by OpenWrt default_postinst after package files are installed.
+exit 0

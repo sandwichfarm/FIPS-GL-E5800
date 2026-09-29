@@ -1,0 +1,6 @@
+fips
+fipsctl
+fipstop
+generated-configs
+__pycache__
+sim-results

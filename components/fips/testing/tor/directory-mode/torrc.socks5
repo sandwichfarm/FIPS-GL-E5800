@@ -1,0 +1,17 @@
+# Tor configuration for directory-mode test node B (socks5-only).
+# No onion service — outbound connections only.
+
+# IsolateSOCKSAuth is required because FIPS uses SOCKS5 username/password
+# for per-destination circuit isolation.
+SocksPort 127.0.0.1:9050 IsolateSOCKSAuth
+
+# Security hardening
+ExitRelay 0
+ExitPolicy reject *:*
+Sandbox 1
+VanguardsLiteEnabled 1
+ConnectionPadding 1
+SafeLogging 1
+
+# Logging
+Log notice stderr

@@ -1,0 +1,1072 @@
+name: OpenWrt Package
+on:
+  push:
+    branches:
+      - master
+      - maint
+      - next
+    tags:
+      - "v*"
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      arch:
+        description: "Target architecture (leave empty to build all)"
+        required: false
+        default: ""
+
+env:
+  CARGO_TERM_COLOR: always
+  PACKAGE_NAME: "fips"
+
+jobs:
+  determine-versioning:
+    runs-on: ubuntu-latest
+    outputs:
+      package_version: ${{ steps.version.outputs.package_version }}
+      apk_version: ${{ steps.version.outputs.apk_version }}
+      release_channel: ${{ steps.channel.outputs.release_channel }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+
+      - name: Derive package version
+        id: version
+        shell: bash
+        run: |
+          : ${GITHUB_OUTPUT:=/tmp/github_output}
+          # package_version is the human-readable label used in artifact
+          # filenames; apk_version is the apk-tools-compatible string embedded
+          # in the .apk metadata. apk_version is built directly from the same
+          # structured inputs (tag, or commit height) — no reparse of the
+          # flattened package_version. See packaging/openwrt-apk/apk-version.sh.
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            echo "package_version=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+            echo "apk_version=$(sh packaging/openwrt-apk/apk-version.sh tag "${GITHUB_REF_NAME}")" >> "$GITHUB_OUTPUT"
+          else
+            BRANCH=$(echo "$GITHUB_REF_NAME" | sed 's|/|-|g')
+            HEIGHT=$(git rev-list --count HEAD)
+            HASH=$(git rev-parse --short HEAD)
+            echo "package_version=${BRANCH}.${HEIGHT}.${HASH}" >> "$GITHUB_OUTPUT"
+            echo "apk_version=$(sh packaging/openwrt-apk/apk-version.sh dev "${HEIGHT}")" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Determine release channel
+        id: channel
+        shell: bash
+        run: |
+          : ${GITHUB_OUTPUT:=/tmp/github_output}
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            TAG_NAME=${GITHUB_REF#refs/tags/}
+            if [[ $TAG_NAME =~ ^v[0-9]+\.[0-9]+\.[0-9]+-alpha ]]; then
+              echo "release_channel=alpha" >> "$GITHUB_OUTPUT"
+            elif [[ $TAG_NAME =~ ^v[0-9]+\.[0-9]+\.[0-9]+-beta ]]; then
+              echo "release_channel=beta" >> "$GITHUB_OUTPUT"
+            elif [[ $TAG_NAME =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "release_channel=stable" >> "$GITHUB_OUTPUT"
+            else
+              echo "release_channel=dev" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "release_channel=dev" >> "$GITHUB_OUTPUT"
+          fi
+
+  compile-binaries:
+    name: Cross-compile (${{ matrix.openwrt_arch }})
+    runs-on: ubuntu-latest
+    needs: determine-versioning
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - build_arch: aarch64
+            openwrt_arch: aarch64_cortex-a53
+            rust_target: aarch64-unknown-linux-musl
+            rust_channel: stable
+            # MT3000, MT6000, Flint 2, RPi 3/4/5
+          # MIPS disabled: 32-bit MIPS has no 64-bit atomics, and both
+          # nostr-relay-pool 0.44 and fips itself (outside the transport stats
+          # modules) use std::sync::atomic::AtomicU64. Re-enabling needs both on
+          # portable_atomic, and the nightly entries below also need -Zbuild-std,
+          # which the build step does not pass.
+          # - build_arch: mipsel
+          #   openwrt_arch: mipsel_24kc
+          #   rust_target: mipsel-unknown-linux-musl
+          #   rust_channel: nightly
+          # - build_arch: mips
+          #   openwrt_arch: mips_24kc
+          #   rust_target: mips-unknown-linux-musl
+          #   rust_channel: nightly
+          - build_arch: x86_64
+            openwrt_arch: x86_64
+            rust_target: x86_64-unknown-linux-musl
+            rust_channel: stable
+            # x86 routers / VMs
+
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain (stable)
+        if: matrix.rust_channel == 'stable'
+        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          target: ${{ matrix.rust_target }}
+          cache: false
+          rustflags: ''
+
+      - name: Install Rust toolchain (nightly, Tier 3)
+        if: matrix.rust_channel == 'nightly'
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+
+      - name: Cache Cargo registry + build
+        if: ${{ env.ACT != 'true' }}
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/${{ matrix.rust_target }}
+          key: openwrt-${{ matrix.rust_target }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            openwrt-${{ matrix.rust_target }}-
+
+      - name: Install cargo-zigbuild
+        run: cargo install cargo-zigbuild --version 0.19.8 --locked
+
+      - name: Install zig (required by cargo-zigbuild)
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIG_VERSION="0.13.0"
+          # Each arch carries the expected SHA-256 of its upstream tarball,
+          # taken from ziglang.org's own https://ziglang.org/download/index.json,
+          # field .["<version>"]["<arch>-linux"].shasum:
+          #   jq -r '.["0.13.0"]["x86_64-linux"].shasum' index.json
+          # Upstream publishes no .sha256 sidecar and no SHA256SUMS, so
+          # index.json is the only checksum document offered, and it lists only
+          # recent releases: once a version ages out of it the pin can no longer
+          # be re-derived upstream. Bumping ZIG_VERSION means replacing every
+          # hash below, and adding an arch means adding its hash here too.
+          ARCH=$(uname -m)
+          case "$ARCH" in
+            x86_64|amd64)
+              ZIG_ARCH="x86_64"
+              ZIG_SHA256="d45312e61ebcc48032b77bc4cf7fd6915c11fa16e4aad116b66c9468211230ea"
+              ;;
+            aarch64|arm64)
+              ZIG_ARCH="aarch64"
+              ZIG_SHA256="041ac42323837eb5624068acd8b00cd5777dac4cf91179e8dad7a7e90dd0c556"
+              ;;
+            *)
+              echo "Unsupported architecture: $ARCH"
+              exit 1
+              ;;
+          esac
+          if [ -z "${ZIG_SHA256:-}" ]; then
+            echo "No SHA-256 pinned for zig ${ZIG_VERSION} on ${ZIG_ARCH}."
+            echo "Add one to the case above, from https://ziglang.org/download/index.json:"
+            echo "  jq -r '.[\"${ZIG_VERSION}\"][\"${ZIG_ARCH}-linux\"].shasum'"
+            exit 1
+          fi
+
+          NAME="zig-linux-${ZIG_ARCH}-${ZIG_VERSION}.tar.xz"
+          URL="https://ziglang.org/download/${ZIG_VERSION}/${NAME}"
+          # Stage outside the checkout so a failed attempt cannot leave a stray
+          # tarball in the working tree.
+          ZIG_TMP="$(mktemp -d)"
+          trap 'rm -rf "$ZIG_TMP"' EXIT
+          TARBALL="${ZIG_TMP}/${NAME}"
+
+          # Download to a file and check it before anything consumes it: piping
+          # curl straight into tar let a truncated transfer reach the extractor,
+          # which is how this step failed. curl's own --retry does not cover a
+          # short read (exit 18), and a checksum mismatch needs a fresh download
+          # anyway, so the retry is an explicit bounded loop.
+          verified=""
+          previous=""
+          for attempt in 1 2 3; do
+            rm -f "$TARBALL"
+            if curl -fsSL -o "$TARBALL" "$URL" && [ -s "$TARBALL" ]; then
+              actual="$(sha256sum < "$TARBALL" | cut -d' ' -f1)"
+              if [ "$actual" = "$ZIG_SHA256" ]; then
+                echo "zig tarball matches its pinned SHA-256 (${actual})"
+                verified=yes
+                break
+              fi
+              echo "zig tarball failed its checksum on attempt ${attempt}:"
+              echo "  expected ${ZIG_SHA256}"
+              echo "  actual   ${actual}"
+              echo "  size     $(wc -c < "$TARBALL") bytes"
+              if [ "$actual" = "$previous" ]; then
+                echo "Two attempts fetched byte-identical content, so retrying is not"
+                echo "going to help: the pin is stale, upstream re-published, or the"
+                echo "source is serving the same bad file every time."
+                break
+              fi
+              previous="$actual"
+            else
+              echo "zig tarball download failed on attempt ${attempt}"
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              sleep $((attempt * 10))
+            fi
+          done
+
+          if [ -z "$verified" ]; then
+            echo "zig ${ZIG_VERSION} (${ZIG_ARCH}) did not download with its pinned"
+            echo "SHA-256 after ${attempt} attempt(s). Refusing to extract a tarball"
+            echo "that does not match the pin; failing the build."
+            exit 1
+          fi
+
+          sudo tar xJ -C /opt -f "$TARBALL"
+          sudo ln -sf /opt/zig-linux-${ZIG_ARCH}-${ZIG_VERSION}/zig /usr/local/bin/zig
+          zig version
+
+      - name: Install llvm-strip
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends llvm
+
+      # Cross-compile + strip once; both the .ipk and .apk packagers consume
+      # these artifacts via --bin-dir, so the Rust build runs a single time
+      # per architecture instead of once per package format.
+      - name: Cross-compile and strip binaries
+        run: |
+          set -euo pipefail
+          cargo zigbuild --release --target ${{ matrix.rust_target }} \
+            --bin fips --bin fipsctl --bin fipstop --bin fips-gateway
+          RELEASE_DIR="target/${{ matrix.rust_target }}/release"
+          mkdir -p out
+          for b in fips fipsctl fipstop fips-gateway; do
+            llvm-strip "$RELEASE_DIR/$b" 2>/dev/null || true
+            cp "$RELEASE_DIR/$b" "out/$b"
+          done
+          ls -lh out/
+
+      - name: Upload binaries artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: fips-bins-${{ matrix.openwrt_arch }}
+          path: out/
+          retention-days: 1
+
+  build:
+    name: Build .ipk (${{ matrix.openwrt_arch }})
+    runs-on: ubuntu-latest
+    needs: [determine-versioning, compile-binaries]
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # Must be a subset of compile-binaries' arches (this job consumes those
+        # binary artifacts). Currently both ship aarch64 + x86_64.
+        include:
+          - build_arch: aarch64
+            openwrt_arch: aarch64_cortex-a53
+          - build_arch: x86_64
+            openwrt_arch: x86_64
+
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+
+      - name: Set SOURCE_DATE_EPOCH from git
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
+
+      - name: Initialize
+        run: |
+          PACKAGE_FILENAME=${{ env.PACKAGE_NAME }}_${{ needs.determine-versioning.outputs.package_version }}_${{ matrix.openwrt_arch }}.ipk
+          echo "PACKAGE_FILENAME=$PACKAGE_FILENAME" >> $GITHUB_ENV
+
+      - name: Download prebuilt binaries
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: fips-bins-${{ matrix.openwrt_arch }}
+          path: bins
+
+      # nak receives the signing nsec on argv further down, so the download is
+      # staged and checked against a pinned SHA-256 before it is installed.
+      - name: Install nak
+        shell: bash
+        run: |
+          bash .github/scripts/install-nak.sh
+          nak --version
+
+      - name: Install jq
+        run: |
+          if ! command -v jq &>/dev/null; then
+            sudo apt-get update && sudo apt-get install -y jq
+          fi
+
+      # Priority: HIVE_CI_NSEC from env (loom job) > repo secret > generate ephemeral
+      - name: Resolve signing key
+        id: keys
+        shell: bash
+        env:
+          SECRET_NSEC: ${{ secrets.HIVE_CI_NSEC }}
+        run: |
+          : ${GITHUB_OUTPUT:=/tmp/github_output}
+          if [ -n "${HIVE_CI_NSEC:-}" ]; then
+            echo "Using HIVE_CI_NSEC from loom job environment"
+            NSEC="$HIVE_CI_NSEC"
+          elif [ -n "$SECRET_NSEC" ]; then
+            echo "Using HIVE_CI_NSEC from repository secrets"
+            NSEC="$SECRET_NSEC"
+          else
+            echo "No nsec provided -- generating ephemeral keypair"
+            NSEC=$(nak key generate)
+          fi
+
+          PUBKEY=$(echo "$NSEC" | nak key public)
+          echo "::add-mask::$NSEC"
+          echo "nsec=$NSEC" >> "$GITHUB_OUTPUT"
+          echo "pubkey=$PUBKEY" >> "$GITHUB_OUTPUT"
+          echo "Publisher pubkey (hex): $PUBKEY"
+      - name: Build .ipk
+        env:
+          PKG_VERSION: ${{ needs.determine-versioning.outputs.package_version }}
+        run: ./packaging/openwrt-ipk/build-ipk.sh --arch ${{ matrix.build_arch }} --bin-dir "$GITHUB_WORKSPACE/bins"
+
+      - name: Install shellcheck (if missing)
+        shell: bash
+        run: |
+          if ! command -v shellcheck >/dev/null 2>&1; then
+            sudo apt-get update && sudo apt-get install -y --no-install-recommends shellcheck
+          fi
+          shellcheck --version
+
+      # Its own step, and its own shell dialect. The shipped-scripts lint below
+      # runs --shell=sh with the OpenWrt rc.common exclude set, which misfires
+      # on a bash script; install-nak.sh is also not shipped in the package.
+      - name: Lint install-nak.sh
+        shell: bash
+        run: shellcheck --shell=bash .github/scripts/install-nak.sh
+
+      - name: Lint shipped shell scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILES_DIR=packaging/openwrt-ipk/files
+          # Scripts shipped inside the .ipk. The init scripts use the OpenWrt
+          # `#!/bin/sh /etc/rc.common` shebang; tell shellcheck to treat them
+          # as POSIX sh and silence the unrecognized-shebang warning (SC1008).
+          # SC2317 (unreachable command) fires on rc.common's externally-invoked
+          # start_service/stop_service/reload_service hooks.
+          TARGETS=(
+            "$FILES_DIR/etc/init.d/fips"
+            "$FILES_DIR/etc/init.d/fips-gateway"
+            "$FILES_DIR/etc/fips/firewall.sh"
+            "$FILES_DIR/etc/hotplug.d/net/99-fips"
+            "$FILES_DIR/etc/uci-defaults/90-fips-setup"
+            "$FILES_DIR/usr/bin/fips-mesh-setup"
+            "$FILES_DIR/usr/bin/fips-ap-setup"
+          )
+          fail=0
+          for f in "${TARGETS[@]}"; do
+            if [ ! -f "$f" ]; then
+              echo "FAIL: missing $f"
+              fail=1
+              continue
+            fi
+            echo "==> shellcheck $f"
+            if shellcheck --shell=sh --exclude=SC1008,SC2317,SC2034,SC3043,SC2086,SC2089,SC2090 "$f"; then
+              echo "    PASS"
+            else
+              echo "    FAIL"
+              fail=1
+            fi
+          done
+          if [ "$fail" -ne 0 ]; then
+            echo "shellcheck FAILED"
+            exit 1
+          fi
+          echo "shellcheck PASS (${#TARGETS[@]} scripts)"
+
+      - name: Sysctl drop-in syntax check
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILES_DIR=packaging/openwrt-ipk/files
+          TARGETS=(
+            "$FILES_DIR/etc/sysctl.d/fips-gateway.conf"
+            "$FILES_DIR/etc/sysctl.d/fips-bridge.conf"
+          )
+          fail=0
+          for conf in "${TARGETS[@]}"; do
+            if [ ! -f "$conf" ]; then
+              echo "FAIL: missing $conf"
+              fail=1
+              continue
+            fi
+            echo "==> validating $conf"
+            lineno=0
+            file_ok=1
+            while IFS= read -r line || [ -n "$line" ]; do
+              lineno=$((lineno + 1))
+              # Skip comments and blank lines.
+              case "$line" in
+                ''|\#*) continue ;;
+              esac
+              # Match: <key> = <value> where key is dotted lower-id and value is
+              # an integer (sysctl drop-ins shipped here are all numeric toggles).
+              if ! [[ "$line" =~ ^[a-z0-9_.-]+[[:space:]]*=[[:space:]]*-?[0-9]+[[:space:]]*$ ]]; then
+                echo "    FAIL line $lineno: $line"
+                file_ok=0
+              fi
+            done < "$conf"
+            if [ "$file_ok" -eq 1 ]; then
+              echo "    PASS"
+            else
+              fail=1
+            fi
+          done
+          if [ "$fail" -ne 0 ]; then
+            echo "sysctl drop-in syntax check FAILED"
+            exit 1
+          fi
+          echo "sysctl drop-in syntax check PASS"
+
+      - name: Verify ipk structural integrity
+        shell: bash
+        run: |
+          set -euo pipefail
+          IPK="dist/${{ env.PACKAGE_FILENAME }}"
+          if [ ! -f "$IPK" ]; then
+            echo "FAIL: produced ipk not found at $IPK"
+            exit 1
+          fi
+          echo "==> file type:"
+          file "$IPK"
+
+          # OpenWrt .ipk = tar.gz containing debian-binary + control.tar.gz +
+          # data.tar.gz (NOT an ar archive like Debian's .deb).
+          WORK=$(mktemp -d)
+          trap 'rm -rf "$WORK"' EXIT
+
+          tar -xzf "$IPK" -C "$WORK"
+          echo "==> top-level entries:"
+          ls -la "$WORK"
+
+          # Top-level structural assertions.
+          fail=0
+          for entry in debian-binary control.tar.gz data.tar.gz; do
+            if [ ! -f "$WORK/$entry" ]; then
+              echo "FAIL: missing top-level $entry"
+              fail=1
+            else
+              echo "    PASS top-level: $entry"
+            fi
+          done
+          if [ "$fail" -ne 0 ]; then exit 1; fi
+
+          # debian-binary content sanity.
+          dbin_content=$(cat "$WORK/debian-binary" | tr -d '[:space:]')
+          if [ "$dbin_content" != "2.0" ]; then
+            echo "FAIL: debian-binary content is '$dbin_content' (expected 2.0)"
+            exit 1
+          fi
+          echo "    PASS debian-binary content: 2.0"
+
+          # Inspect data.tar.gz contents.
+          DATA_LIST="$WORK/data.list"
+          tar -tzf "$WORK/data.tar.gz" > "$DATA_LIST"
+          echo "==> data.tar.gz entry count: $(wc -l < "$DATA_LIST")"
+
+          # Required filesystem entries inside data.tar.gz. Entries are
+          # produced with a leading "./" by build-ipk.sh.
+          REQUIRED=(
+            ./usr/bin/fips
+            ./usr/bin/fipsctl
+            ./usr/bin/fipstop
+            ./usr/bin/fips-gateway
+            ./usr/bin/fips-mesh-setup
+            ./usr/bin/fips-ap-setup
+            ./etc/init.d/fips
+            ./etc/init.d/fips-gateway
+            ./etc/fips/fips.yaml
+            ./etc/fips/firewall.sh
+            ./etc/sysctl.d/fips-gateway.conf
+            ./etc/sysctl.d/fips-bridge.conf
+            ./etc/hotplug.d/net/99-fips
+            ./etc/uci-defaults/90-fips-setup
+            ./lib/upgrade/keep.d/fips
+          )
+          for path in "${REQUIRED[@]}"; do
+            if grep -Fxq "$path" "$DATA_LIST"; then
+              echo "    PASS data: $path"
+            else
+              echo "    FAIL data: missing $path"
+              fail=1
+            fi
+          done
+
+          # Inspect control.tar.gz: must contain control file + maintainer scripts.
+          CTRL_LIST="$WORK/control.list"
+          tar -tzf "$WORK/control.tar.gz" > "$CTRL_LIST"
+          echo "==> control.tar.gz entry count: $(wc -l < "$CTRL_LIST")"
+          for path in ./control ./conffiles ./postinst ./prerm; do
+            if grep -Fxq "$path" "$CTRL_LIST"; then
+              echo "    PASS control: $path"
+            else
+              echo "    FAIL control: missing $path"
+              fail=1
+            fi
+          done
+
+          if [ "$fail" -ne 0 ]; then
+            echo "ipk structural verification FAILED"
+            exit 1
+          fi
+          echo "ipk structural verification PASS"
+
+      - name: SHA-256 hashes
+        run: |
+          echo "==> Binaries:"
+          sha256sum bins/fips bins/fipsctl bins/fipstop
+          echo "==> Package:"
+          sha256sum dist/${{ env.PACKAGE_FILENAME }}
+
+      - name: Upload artifact (GitHub only)
+        if: ${{ env.ACT != 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ env.PACKAGE_FILENAME }}
+          path: dist/${{ env.PACKAGE_FILENAME }}
+          retention-days: 30
+
+      - name: Upload to Blossom
+        id: blossom_upload
+        continue-on-error: true
+        shell: bash
+        env:
+          BLOSSOM_SERVER: "https://blossom.primal.net"
+          NSEC: ${{ steps.keys.outputs.nsec }}
+        run: |
+          : ${GITHUB_OUTPUT:=/tmp/github_output}
+
+          FILE_HASH=""
+          for attempt in 1 2 3; do
+            if UPLOAD_RESPONSE=$(nak blossom upload \
+              --server "$BLOSSOM_SERVER" \
+              --sec "$NSEC" \
+              "dist/${{ env.PACKAGE_FILENAME }}" < /dev/null); then
+              echo "Upload response (attempt $attempt):"
+              echo "$UPLOAD_RESPONSE"
+              FILE_HASH=$(echo "$UPLOAD_RESPONSE" | jq -r '.sha256')
+              if [ -n "$FILE_HASH" ] && [ "$FILE_HASH" != "null" ]; then
+                break
+              fi
+              echo "Upload response had no sha256 (attempt $attempt)"
+            else
+              echo "Blossom upload timed out or failed (attempt $attempt)"
+            fi
+            FILE_HASH=""
+            [ "$attempt" -lt 3 ] && sleep $((attempt * 10))
+          done
+
+          if [ -z "$FILE_HASH" ] || [ "$FILE_HASH" = "null" ]; then
+            echo "Blossom upload did not succeed after 3 attempts; non-fatal."
+            echo "The package still ships as a GitHub release artifact; only the"
+            echo "supplementary Blossom/nostr distribution is skipped this run."
+            exit 1
+          fi
+
+          BLOSSOM_URL="${BLOSSOM_SERVER}/${FILE_HASH}"
+          echo "url=$BLOSSOM_URL" >> "$GITHUB_OUTPUT"
+          echo "hash=$FILE_HASH" >> "$GITHUB_OUTPUT"
+          echo "Uploaded to Blossom: $BLOSSOM_URL"
+
+      - name: Publish NIP-94 release event
+        id: publish
+        if: steps.blossom_upload.outcome == 'success'
+        shell: bash
+        env:
+          RELAYS: "wss://relay.damus.io wss://nos.lol wss://nostr.mom wss://offchain.pub"
+          NSEC: ${{ steps.keys.outputs.nsec }}
+        run: |
+          : ${GITHUB_OUTPUT:=/tmp/github_output}
+          set -e
+
+          VERSION="${{ needs.determine-versioning.outputs.package_version }}"
+          CHANNEL="${{ needs.determine-versioning.outputs.release_channel }}"
+
+          nak event --sec "$NSEC" -k 1063 \
+            -c "FIPS Package: ${{ env.PACKAGE_NAME }} for ${{ matrix.openwrt_arch }}" \
+            --tag url="${{ steps.blossom_upload.outputs.url }}" \
+            --tag m="application/octet-stream" \
+            --tag x="${{ steps.blossom_upload.outputs.hash }}" \
+            --tag ox="${{ steps.blossom_upload.outputs.hash }}" \
+            --tag filename="${{ env.PACKAGE_FILENAME }}" \
+            --tag A="${{ matrix.openwrt_arch }}" \
+            --tag v="$VERSION" \
+            --tag n="${{ env.PACKAGE_NAME }}" \
+            --tag format="ipk" \
+            --tag compression="none" \
+            > event.json 2> event.err
+
+          if [ ! -s event.json ]; then
+            echo "Failed to create event"
+            cat event.err 2>/dev/null || true
+            exit 1
+          fi
+
+          echo "=== Event JSON ==="
+          cat event.json
+          echo "=================="
+
+          EVENT_ID=$(jq -r '.id' event.json)
+          if [ -z "$EVENT_ID" ] || [ "$EVENT_ID" = "null" ]; then
+            echo "Failed to extract event ID"
+            exit 1
+          fi
+
+          # Publish to relays
+          cat event.json | nak event $RELAYS 2>&1
+
+          echo "eventId=$EVENT_ID" >> "$GITHUB_OUTPUT"
+          echo "Published NIP-94 event: $EVENT_ID"
+
+      - name: Verify NIP-94 event on relays
+        if: ${{ steps.publish.outputs.eventId != '' }}
+        env:
+          EVENT_ID: ${{ steps.publish.outputs.eventId }}
+          RELAYS: "wss://relay.damus.io wss://nos.lol wss://nostr.mom wss://offchain.pub"
+        run: |
+          echo "Verifying event $EVENT_ID on relays..."
+          FOUND=0
+          for relay in $RELAYS; do
+            echo "Checking $relay..."
+            RESULT=$(nak req -i "$EVENT_ID" "$relay" 2>/dev/null || echo "")
+            if [ -n "$RESULT" ]; then
+              echo "Found on $relay"
+              FOUND=1
+            else
+              echo "Not found on $relay"
+            fi
+          done
+
+          if [ $FOUND -eq 0 ]; then
+            echo "Warning: Event not found on any relay yet (may still be propagating)"
+          else
+            echo "Event verified on at least one relay"
+          fi
+
+      - name: Build Summary
+        run: |
+          echo "Build Summary for ${{ matrix.openwrt_arch }}:"
+          echo "  Package: ${{ env.PACKAGE_FILENAME }}"
+          echo "  Release EventId: ${{ steps.publish.outputs.eventId }}"
+          echo "  Blossom URL: ${{ steps.blossom_upload.outputs.url }}"
+
+  build-apk:
+    name: Build .apk (${{ matrix.openwrt_arch }})
+    runs-on: ubuntu-latest
+    needs: [determine-versioning, compile-binaries]
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # Must be a subset of compile-binaries' arches.
+        include:
+          - build_arch: aarch64
+            openwrt_arch: aarch64_cortex-a53
+            # MT3000, MT6000, Flint 2, RPi 3/4/5 on OpenWrt 25+
+          - build_arch: x86_64
+            openwrt_arch: x86_64
+            # x86 routers / VMs on OpenWrt 25+
+
+    env:
+      # apk-tools commit OpenWrt pins for the .apk (ADB) format. Keep in sync
+      # with package/system/apk/Makefile in the targeted OpenWrt release so the
+      # packages we produce are readable by the apk on the device.
+      APK_TOOLS_VERSION: "3.0.5"
+      APK_TOOLS_COMMIT: "b5a31c0d865342ad80be10d68f1bb3d3ad9b0866"
+
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+
+      - name: Set SOURCE_DATE_EPOCH from git
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
+
+      - name: Initialize
+        run: |
+          PACKAGE_FILENAME=${{ env.PACKAGE_NAME }}_${{ needs.determine-versioning.outputs.package_version }}_${{ matrix.openwrt_arch }}.apk
+          echo "PACKAGE_FILENAME=$PACKAGE_FILENAME" >> $GITHUB_ENV
+
+      - name: Download prebuilt binaries
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: fips-bins-${{ matrix.openwrt_arch }}
+          path: bins
+
+      - name: Install fakeroot
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends fakeroot
+
+      # apk mkpkg lives in apk-tools v3, which is not packaged for Ubuntu, so we
+      # build the pinned release from source. This is the SDK-free equivalent of
+      # how the .ipk path uses plain tar — one small C tool, no OpenWrt SDK.
+      - name: Build apk-tools (${{ env.APK_TOOLS_VERSION }}) from source
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y --no-install-recommends \
+            git ca-certificates build-essential meson ninja-build pkg-config \
+            zlib1g-dev libssl-dev libzstd-dev liblzma-dev lua5.4-dev scdoc
+          # gitlab.alpinelinux.org has taken this step down repeatedly, both as
+          # a truncated clone and as a 135-second connect timeout, and it fails
+          # per runner rather than per run: one architecture fetched while the
+          # other could not reach the host at all. So prefer alpinelinux's
+          # GitHub mirror and keep the canonical host as the fallback. The
+          # commit is pinned by SHA, so the mirror cannot supply different
+          # content under the same name.
+          #
+          # Each attempt fetches only that commit at depth 1, which needs
+          # uploadpack.allowReachableSHA1InWant; both hosts allow it today. The
+          # timeout caps a dead host at a minute instead of curl's own 135.
+          APK_TOOLS_MIRRORS="https://github.com/alpinelinux/apk-tools.git https://gitlab.alpinelinux.org/alpine/apk-tools.git"
+          fetch_pinned() {
+            rm -rf /tmp/apk-tools
+            timeout 120 git init --quiet /tmp/apk-tools \
+              && git -C /tmp/apk-tools remote add origin "$1" \
+              && timeout 60 git -C /tmp/apk-tools fetch --quiet --depth 1 origin "${APK_TOOLS_COMMIT}" \
+              && git -C /tmp/apk-tools checkout --quiet FETCH_HEAD
+          }
+          got_source=
+          for round in 1 2 3; do
+            for repo in $APK_TOOLS_MIRRORS; do
+              if fetch_pinned "$repo"; then got_source=$repo; break 2; fi
+              echo "apk-tools: round $round failed against $repo" >&2
+            done
+            sleep 20
+          done
+          if [ -z "$got_source" ]; then
+            echo "::error::could not obtain apk-tools ${APK_TOOLS_COMMIT} from any of: $APK_TOOLS_MIRRORS"
+            exit 1
+          fi
+          echo "apk-tools ${APK_TOOLS_COMMIT} fetched from $got_source"
+          cd /tmp/apk-tools
+          meson setup build
+          ninja -C build src/apk
+          APK_BIN=/tmp/apk-tools/build/src/apk
+          "$APK_BIN" --version 2>/dev/null || "$APK_BIN" version 2>/dev/null || true
+          echo "APK_BIN=$APK_BIN" >> "$GITHUB_ENV"
+
+      - name: Build .apk
+        env:
+          PKG_VERSION: ${{ needs.determine-versioning.outputs.package_version }}
+          APK_VERSION: ${{ needs.determine-versioning.outputs.apk_version }}
+        run: ./packaging/openwrt-apk/build-apk.sh --arch ${{ matrix.build_arch }} --bin-dir "$GITHUB_WORKSPACE/bins"
+
+      - name: Verify apk structural integrity
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="dist/${{ env.PACKAGE_FILENAME }}"
+          if [ ! -s "$APK" ]; then
+            echo "FAIL: produced apk not found or empty at $APK"
+            exit 1
+          fi
+          echo "==> file type:"; file "$APK"
+
+          # apk v3 packages are ADB containers; dump the whole manifest with the
+          # apk-tools we just built. Print it in full so the exact schema is
+          # always visible in the log if an assertion needs adjusting.
+          DUMP=$(mktemp)
+          "$APK_BIN" adbdump "$APK" > "$DUMP" 2>/dev/null || {
+            echo "FAIL: 'apk adbdump' could not read $APK"; exit 1; }
+          echo "==> full adbdump:"; cat "$DUMP"
+
+          fail=0
+          # Package metadata (flat keys under info:).
+          for needle in "name: fips" "version: ${{ needs.determine-versioning.outputs.apk_version }}" "arch: ${{ matrix.openwrt_arch }}"; do
+            if grep -qF "$needle" "$DUMP"; then
+              echo "  PASS meta: $needle"
+            else
+              echo "  FAIL meta: missing '$needle'"; fail=1
+            fi
+          done
+
+          # installed-size reflects the bundled binaries (4 stripped Rust
+          # binaries, several MB). A payload regression that drops them shows up
+          # here regardless of how the path tree is formatted.
+          SIZE=$(awk '/^[[:space:]]*installed-size:/ {print $2; exit}' "$DUMP")
+          echo "  installed-size: ${SIZE:-unknown}"
+          if [ -z "${SIZE:-}" ] || [ "$SIZE" -lt 1000000 ]; then
+            echo "  FAIL: installed-size implausibly small (binaries missing?)"; fail=1
+          else
+            echo "  PASS: installed-size >= 1MB"
+          fi
+
+          # The adbdump paths: block is hierarchical. Each directory is a
+          # top-level list item "- name: <full relative dir>"; its files are
+          # "- name: <basename>" nested one indent level deeper under "files:".
+          # (There are no "path:" keys.) Reconstruct full file paths by keying
+          # off the indentation of the directory-level list items.
+          RECON=$(awk '
+            /^paths:/ {p=1; diri=-1; next}
+            p && /^[^ #-]/ {p=0}                 # a new top-level key ends paths:
+            !p {next}
+            match($0, /^ *- /) {
+              ind=RLENGTH; rest=substr($0, RLENGTH+1)
+              if (diri==-1) diri=ind             # first list item = directory indent
+              if (ind==diri) {                   # directory entry (or the root acl: entry)
+                if (rest ~ /^name: /) { dir=rest; sub(/^name: /,"",dir) } else dir=""
+                next
+              }
+              if (rest ~ /^name: /) {            # deeper item = a file under files:
+                f=rest; sub(/^name: /,"",f); print (dir==""?f:dir"/"f)
+              }
+            }
+          ' "$DUMP")
+          echo "==> reconstructed paths:"; printf '%s\n' "$RECON"
+
+          for path in \
+            usr/bin/fips usr/bin/fipsctl usr/bin/fipstop usr/bin/fips-gateway \
+            usr/bin/fips-mesh-setup usr/bin/fips-ap-setup \
+            etc/init.d/fips etc/init.d/fips-gateway \
+            etc/fips/fips.yaml etc/fips/firewall.sh \
+            etc/sysctl.d/fips-gateway.conf etc/sysctl.d/fips-bridge.conf \
+            etc/hotplug.d/net/99-fips etc/uci-defaults/90-fips-setup \
+            lib/upgrade/keep.d/fips; do
+            if printf '%s\n' "$RECON" | grep -qxF "$path"; then
+              echo "  PASS path: $path"
+            else
+              echo "  FAIL path: missing $path"; fail=1
+            fi
+          done
+
+          # Maintainer scripts. adbdump prints each registered script as a
+          # "<phase>:" key under scripts:. An upgrade runs only pre-upgrade and
+          # post-upgrade, so a package missing either restarts nothing.
+          for s in post-install pre-upgrade post-upgrade pre-deinstall; do
+            if grep -qE "^[[:space:]]*${s}:" "$DUMP"; then
+              echo "  PASS script: $s"
+            else
+              echo "  FAIL script: missing $s"; fail=1
+            fi
+          done
+
+          if [ "$fail" -ne 0 ]; then
+            echo "apk structural verification FAILED"
+            exit 1
+          fi
+          echo "apk structural verification PASS"
+
+      - name: SHA-256 hashes
+        run: |
+          echo "==> Binaries:"
+          sha256sum bins/fips bins/fipsctl bins/fipstop
+          echo "==> Package:"
+          sha256sum dist/${{ env.PACKAGE_FILENAME }}
+
+      - name: Upload artifact (GitHub only)
+        if: ${{ env.ACT != 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ env.PACKAGE_FILENAME }}
+          path: dist/${{ env.PACKAGE_FILENAME }}
+          retention-days: 30
+
+      # nak receives the signing nsec on argv further down, so the download is
+      # staged and checked against a pinned SHA-256 before it is installed.
+      - name: Install nak
+        shell: bash
+        run: |
+          bash .github/scripts/install-nak.sh
+          nak --version
+
+      - name: Install jq
+        run: |
+          if ! command -v jq &>/dev/null; then
+            sudo apt-get update && sudo apt-get install -y jq
+          fi
+
+      # Priority: HIVE_CI_NSEC from env (loom job) > repo secret > generate ephemeral
+      - name: Resolve signing key
+        id: keys
+        shell: bash
+        env:
+          SECRET_NSEC: ${{ secrets.HIVE_CI_NSEC }}
+        run: |
+          : ${GITHUB_OUTPUT:=/tmp/github_output}
+          if [ -n "${HIVE_CI_NSEC:-}" ]; then
+            echo "Using HIVE_CI_NSEC from loom job environment"
+            NSEC="$HIVE_CI_NSEC"
+          elif [ -n "$SECRET_NSEC" ]; then
+            echo "Using HIVE_CI_NSEC from repository secrets"
+            NSEC="$SECRET_NSEC"
+          else
+            echo "No nsec provided -- generating ephemeral keypair"
+            NSEC=$(nak key generate)
+          fi
+
+          PUBKEY=$(echo "$NSEC" | nak key public)
+          echo "::add-mask::$NSEC"
+          echo "nsec=$NSEC" >> "$GITHUB_OUTPUT"
+          echo "pubkey=$PUBKEY" >> "$GITHUB_OUTPUT"
+          echo "Publisher pubkey (hex): $PUBKEY"
+
+      - name: Upload to Blossom
+        id: blossom_upload
+        continue-on-error: true
+        shell: bash
+        env:
+          BLOSSOM_SERVER: "https://blossom.primal.net"
+          NSEC: ${{ steps.keys.outputs.nsec }}
+        run: |
+          : ${GITHUB_OUTPUT:=/tmp/github_output}
+
+          FILE_HASH=""
+          for attempt in 1 2 3; do
+            if UPLOAD_RESPONSE=$(nak blossom upload \
+              --server "$BLOSSOM_SERVER" \
+              --sec "$NSEC" \
+              "dist/${{ env.PACKAGE_FILENAME }}" < /dev/null); then
+              echo "Upload response (attempt $attempt):"
+              echo "$UPLOAD_RESPONSE"
+              FILE_HASH=$(echo "$UPLOAD_RESPONSE" | jq -r '.sha256')
+              if [ -n "$FILE_HASH" ] && [ "$FILE_HASH" != "null" ]; then
+                break
+              fi
+              echo "Upload response had no sha256 (attempt $attempt)"
+            else
+              echo "Blossom upload timed out or failed (attempt $attempt)"
+            fi
+            FILE_HASH=""
+            [ "$attempt" -lt 3 ] && sleep $((attempt * 10))
+          done
+
+          if [ -z "$FILE_HASH" ] || [ "$FILE_HASH" = "null" ]; then
+            echo "Blossom upload did not succeed after 3 attempts; non-fatal."
+            echo "The package still ships as a GitHub release artifact; only the"
+            echo "supplementary Blossom/nostr distribution is skipped this run."
+            exit 1
+          fi
+
+          BLOSSOM_URL="${BLOSSOM_SERVER}/${FILE_HASH}"
+          echo "url=$BLOSSOM_URL" >> "$GITHUB_OUTPUT"
+          echo "hash=$FILE_HASH" >> "$GITHUB_OUTPUT"
+          echo "Uploaded to Blossom: $BLOSSOM_URL"
+
+      - name: Publish NIP-94 release event
+        id: publish
+        if: steps.blossom_upload.outcome == 'success'
+        shell: bash
+        env:
+          RELAYS: "wss://relay.damus.io wss://nos.lol wss://nostr.mom wss://offchain.pub"
+          NSEC: ${{ steps.keys.outputs.nsec }}
+        run: |
+          : ${GITHUB_OUTPUT:=/tmp/github_output}
+          set -e
+
+          VERSION="${{ needs.determine-versioning.outputs.package_version }}"
+          CHANNEL="${{ needs.determine-versioning.outputs.release_channel }}"
+
+          nak event --sec "$NSEC" -k 1063 \
+            -c "FIPS Package: ${{ env.PACKAGE_NAME }} for ${{ matrix.openwrt_arch }} (apk)" \
+            --tag url="${{ steps.blossom_upload.outputs.url }}" \
+            --tag m="application/octet-stream" \
+            --tag x="${{ steps.blossom_upload.outputs.hash }}" \
+            --tag ox="${{ steps.blossom_upload.outputs.hash }}" \
+            --tag filename="${{ env.PACKAGE_FILENAME }}" \
+            --tag A="${{ matrix.openwrt_arch }}" \
+            --tag v="$VERSION" \
+            --tag n="${{ env.PACKAGE_NAME }}" \
+            --tag format="apk" \
+            --tag compression="none" \
+            > event.json 2> event.err
+
+          if [ ! -s event.json ]; then
+            echo "Failed to create event"
+            cat event.err 2>/dev/null || true
+            exit 1
+          fi
+
+          echo "=== Event JSON ==="
+          cat event.json
+          echo "=================="
+
+          EVENT_ID=$(jq -r '.id' event.json)
+          if [ -z "$EVENT_ID" ] || [ "$EVENT_ID" = "null" ]; then
+            echo "Failed to extract event ID"
+            exit 1
+          fi
+
+          # Publish to relays
+          cat event.json | nak event $RELAYS 2>&1
+
+          echo "eventId=$EVENT_ID" >> "$GITHUB_OUTPUT"
+          echo "Published NIP-94 event: $EVENT_ID"
+
+      - name: Build Summary
+        run: |
+          echo "Build Summary for ${{ matrix.openwrt_arch }} (apk):"
+          echo "  Package: ${{ env.PACKAGE_FILENAME }}"
+          echo "  apk version: ${{ needs.determine-versioning.outputs.apk_version }}"
+          echo "  Release EventId: ${{ steps.publish.outputs.eventId }}"
+          echo "  Blossom URL: ${{ steps.blossom_upload.outputs.url }}"
+
+  release:
+    name: Publish GitHub Release (github only)
+    runs-on: ubuntu-latest
+    needs: [build, build-apk]
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download package artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          # Only the .ipk/.apk packages (named fips_<ver>_<arch>.*), not the
+          # fips-bins-* raw-binary artifacts shared between the build jobs.
+          pattern: fips_*
+          path: dist
+          merge-multiple: true
+
+      - name: Generate OpenWrt release checksums
+        run: |
+          cd dist
+          find . -maxdepth 1 -type f \( -name '*.ipk' -o -name '*.apk' \) -printf '%P\n' \
+            | LC_ALL=C sort \
+            | xargs sha256sum \
+            > checksums-openwrt.txt
+
+      # This job used to create the Release object itself, with
+      # generate_release_notes. The three other packaging workflows wait for
+      # that object instead, so whichever got there first decided what the
+      # release page said: if this one won, the written notes were stranded
+      # behind an auto-generated commit list. Wait like the others, so the
+      # release is created once, deliberately, by whoever pushes the tag.
+      - name: Wait for tag release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for attempt in $(seq 1 20); do
+            if gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+              exit 0
+            fi
+            echo "Release ${GITHUB_REF_NAME} not available yet; waiting..."
+            sleep 15
+          done
+
+          echo "Timed out waiting for release ${GITHUB_REF_NAME}" >&2
+          exit 1
+
+      - name: Upload OpenWrt assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${GITHUB_REF_NAME}" \
+            dist/*.ipk \
+            dist/*.apk \
+            dist/checksums-openwrt.txt \
+            --clobber \
+            --repo "${GITHUB_REPOSITORY}"

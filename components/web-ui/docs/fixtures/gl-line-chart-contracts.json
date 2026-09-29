@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "component": "gl-line-chart",
+  "contractId": "gl-line-chart-v1",
+  "props": {
+    "id": { "types": ["String", "Number"], "default": "" },
+    "labels": { "types": ["Array"], "default": [] },
+    "value": { "types": ["Array"], "default": [] },
+    "values": { "types": ["Array"], "default": [] },
+    "datasetLabels": { "types": ["Array"], "default": [] },
+    "backgroundColor": { "types": ["String", "Array"], "default": "" },
+    "borderColor": { "types": ["String", "Array"], "default": "" },
+    "borderWidth": { "types": ["Number"], "default": 2 },
+    "height": { "types": ["String", "Number"], "default": 75 },
+    "fill": { "types": ["Boolean"], "default": true },
+    "x": { "types": ["Object"], "default": { "display": false } },
+    "y": { "types": ["Object"], "default": { "display": false, "min": 0 } },
+    "plugins": { "types": ["Object"], "default": {} }
+  },
+  "behavior": {
+    "updateDebounceMs": 100,
+    "animations": { "xDurationMs": 0, "yDurationMs": 0 },
+    "responsive": true,
+    "maintainAspectRatio": false,
+    "pointRadius": 0,
+    "interaction": { "intersect": false, "mode": "index" },
+    "fillWhenEnabled": "origin"
+  },
+  "contracts": [
+    {
+      "contractId": "gl-line-chart-v1",
+      "model": "GL-MT3000",
+      "firmware": "4.8.1",
+      "bundleSha256": "0409574b320a74de904a690df723134fc07471cddf5d622691ebbaa403116705",
+      "evidence": "live-router-official-bundle"
+    },
+    {
+      "contractId": "gl-line-chart-v1",
+      "model": "GL-MT6000",
+      "firmware": "4.9.1",
+      "artifactSha256": "0342114922db0b5e98750a8414eeb23849ce1b8f30f85c46d6d11d69a070bcef",
+      "bundleSha256": "7f932af072e305dbeca23bd33a941fa4cd1e556c46421bf9aebc5fb479162e3a",
+      "evidence": "official-firmware-artifact"
+    }
+  ]
+}

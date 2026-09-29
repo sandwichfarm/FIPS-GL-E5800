@@ -1,0 +1,139 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 580" font-family="monospace" font-size="13">
+  <style>
+    circle.node { fill: #1a1a2e; stroke: #e0e0e0; stroke-width: 2; }
+    circle.root { fill: #1a1a2e; stroke: #d0a040; stroke-width: 2.5; }
+    text { fill: #e0e0e0; }
+    text.name { font-size: 13px; font-weight: bold; }
+    text.npub { font-size: 10px; fill: #808890; }
+    text.transport { font-size: 10px; fill: #909090; }
+    text.legend { font-size: 12px; }
+    text.title { font-size: 16px; font-weight: bold; }
+    text.subtitle { font-size: 12px; fill: #909090; }
+    line.mesh { stroke: #404860; stroke-width: 1.5; }
+    line.tree { stroke: #d0a040; stroke-width: 3; }
+    rect.legend-box { fill: #151520; stroke: #404060; stroke-width: 1; rx: 4; }
+  </style>
+
+  <!-- Background -->
+  <rect width="800" height="580" fill="#0d1117" rx="8"/>
+
+  <!-- Title -->
+  <text x="400" y="30" text-anchor="middle" class="title">FIPS Mesh Network</text>
+  <text x="400" y="48" text-anchor="middle" class="subtitle">Spanning tree highlighted — root elected by smallest node_addr</text>
+
+  <!--
+    Topology:
+      Nodes: A(root), B, C, D, E, F, G, H
+      Tree (gold):  A→B (WiFi), A→C (WiFi), C→D (UDP), B→E (Bluetooth), D→F (UDP), F→G (Ethernet), F→H (Tor)
+      Mesh (gray):  B-D (UDP), C-F (Satellite), E-G (UDP), D-G (Tor)
+  -->
+
+  <!-- === Mesh links (gray, drawn first — under everything) === -->
+
+  <!-- B-D UDP -->
+  <line x1="280" y1="290" x2="500" y2="210" class="mesh"/>
+  <text x="400" y="240" text-anchor="middle" class="transport">UDP</text>
+
+  <!-- C-F Satellite -->
+  <line x1="420" y1="120" x2="640" y2="290" class="mesh"/>
+  <text x="550" y="190" text-anchor="middle" class="transport">Satellite</text>
+
+  <!-- E-G UDP -->
+  <line x1="330" y1="420" x2="520" y2="420" class="mesh"/>
+  <text x="425" y="412" text-anchor="middle" class="transport">UDP</text>
+
+  <!-- D-G Tor -->
+  <line x1="500" y1="210" x2="520" y2="420" class="mesh"/>
+  <text x="525" y="320" text-anchor="middle" class="transport">Tor</text>
+
+  <!-- === Spanning tree links (gold, drawn on top of mesh) === -->
+
+  <!-- A→B WiFi (tree) -->
+  <line x1="140" y1="170" x2="280" y2="290" class="tree"/>
+  <text x="192" y="240" text-anchor="middle" class="transport" fill="#d0a040">WiFi</text>
+
+  <!-- A→C WiFi (tree) -->
+  <line x1="140" y1="170" x2="420" y2="120" class="tree"/>
+  <text x="270" y="132" text-anchor="middle" class="transport" fill="#d0a040">WiFi</text>
+
+  <!-- C→D UDP (tree) -->
+  <line x1="420" y1="120" x2="500" y2="210" class="tree"/>
+  <text x="475" y="155" text-anchor="middle" class="transport" fill="#d0a040">UDP</text>
+
+  <!-- B→E Bluetooth (tree) -->
+  <line x1="280" y1="290" x2="330" y2="420" class="tree"/>
+  <text x="285" y="365" text-anchor="middle" class="transport" fill="#d0a040">Bluetooth</text>
+
+  <!-- D→F UDP (tree) -->
+  <line x1="500" y1="210" x2="640" y2="290" class="tree"/>
+  <text x="585" y="240" text-anchor="middle" class="transport" fill="#d0a040">UDP</text>
+
+  <!-- F→G Ethernet (tree) -->
+  <line x1="640" y1="290" x2="520" y2="420" class="tree"/>
+  <text x="595" y="365" text-anchor="middle" class="transport" fill="#d0a040">Ethernet</text>
+
+  <!-- F→H Tor (tree) -->
+  <line x1="640" y1="290" x2="710" y2="420" class="tree"/>
+  <text x="692" y="362" text-anchor="middle" class="transport" fill="#d0a040">Tor</text>
+
+  <!-- === Nodes (drawn on top of links) === -->
+
+  <!-- Node A (root) -->
+  <circle cx="140" cy="170" r="30" class="root"/>
+  <text x="140" y="166" text-anchor="middle" class="name">A</text>
+  <text x="140" y="179" text-anchor="middle" class="npub">npub1aaa...</text>
+  <text x="140" y="133" text-anchor="middle" class="transport" fill="#d0a040">★ root</text>
+
+  <!-- Node B -->
+  <circle cx="280" cy="290" r="30" class="node"/>
+  <text x="280" y="286" text-anchor="middle" class="name">B</text>
+  <text x="280" y="299" text-anchor="middle" class="npub">npub1bbb...</text>
+
+  <!-- Node C -->
+  <circle cx="420" cy="120" r="30" class="node"/>
+  <text x="420" y="116" text-anchor="middle" class="name">C</text>
+  <text x="420" y="129" text-anchor="middle" class="npub">npub1ccc...</text>
+
+  <!-- Node D -->
+  <circle cx="500" cy="210" r="30" class="node"/>
+  <text x="500" y="206" text-anchor="middle" class="name">D</text>
+  <text x="500" y="219" text-anchor="middle" class="npub">npub1ddd...</text>
+
+  <!-- Node E -->
+  <circle cx="330" cy="420" r="30" class="node"/>
+  <text x="330" y="416" text-anchor="middle" class="name">E</text>
+  <text x="330" y="429" text-anchor="middle" class="npub">npub1eee...</text>
+
+  <!-- Node F -->
+  <circle cx="640" cy="290" r="30" class="node"/>
+  <text x="640" y="286" text-anchor="middle" class="name">F</text>
+  <text x="640" y="299" text-anchor="middle" class="npub">npub1fff...</text>
+
+  <!-- Node G -->
+  <circle cx="520" cy="420" r="30" class="node"/>
+  <text x="520" y="416" text-anchor="middle" class="name">G</text>
+  <text x="520" y="429" text-anchor="middle" class="npub">npub1ggg...</text>
+
+  <!-- Node H -->
+  <circle cx="710" cy="420" r="30" class="node"/>
+  <text x="710" y="416" text-anchor="middle" class="name">H</text>
+  <text x="710" y="429" text-anchor="middle" class="npub">npub1hhh...</text>
+
+  <!-- === Legend === -->
+  <rect x="30" y="490" width="740" height="70" class="legend-box"/>
+
+  <!-- Tree edge legend -->
+  <line x1="50" y1="515" x2="90" y2="515" stroke="#d0a040" stroke-width="3"/>
+  <text x="100" y="519" class="legend">Spanning tree link (parent → child)</text>
+
+  <!-- Mesh edge legend -->
+  <line x1="50" y1="540" x2="90" y2="540" stroke="#404860" stroke-width="1.5"/>
+  <text x="100" y="544" class="legend">Additional mesh link (peer connection)</text>
+
+  <!-- Root legend -->
+  <circle cx="470" cy="515" r="8" fill="none" stroke="#d0a040" stroke-width="2"/>
+  <text x="485" y="519" class="legend">★ Elected root (smallest node_addr)</text>
+
+  <!-- Transport legend -->
+  <text x="470" y="544" class="legend" fill="#909090">Labels show transport type per link</text>
+</svg>

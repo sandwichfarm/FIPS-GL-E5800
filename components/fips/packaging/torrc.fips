@@ -1,0 +1,83 @@
+### FIPS-specific Tor configuration ###
+###
+### Reference torrc for running Tor alongside the FIPS daemon.
+### Uses HiddenServiceDir (directory mode) for the onion service,
+### which enables Sandbox mode — the strongest single hardening option.
+###
+### Install: cp torrc.fips /etc/tor/torrc
+### Verify:  tor --verify-config -f /etc/tor/torrc
+###
+### The corresponding fips.yaml transport section should be:
+###
+###   transports:
+###     tor:
+###       mode: "directory"
+###       directory_service:
+###         hostname_file: "/var/lib/tor/fips_onion_service/hostname"
+###         bind_addr: "127.0.0.1:8443"
+
+## Identity
+DataDirectory /var/lib/tor
+User debian-tor
+
+## SOCKS proxy (for outbound peer connections)
+## IsolateSOCKSAuth: username/password fields serve as circuit isolation
+## keys — each FIPS peer destination gets its own Tor circuit.
+## IsolateDestAddr + IsolateDestPort: additional isolation by destination.
+## IsolateSOCKSAuth: required — FIPS uses SOCKS5 username/password fields
+## as per-destination circuit isolation keys (not real authentication).
+##
+## SafeSocks 1 rejects SOCKS5 CONNECT to raw IP addresses. FIPS supports
+## DNS hostnames in peer addresses — when clearnet peers use hostnames,
+## they are passed through SOCKS5 for Tor-side resolution (no local DNS
+## leak). Enable SafeSocks 1 when all clearnet peers use hostnames or
+## when running .onion-only. Not enabled by default for compatibility
+## with IP-addressed peers.
+SocksPort 127.0.0.1:9050 IsolateSOCKSAuth
+#TestSocks 1    # Enable during development only
+
+## Control access (Unix socket, not TCP — filesystem permission control)
+## Only needed if fips uses control_port mode. In directory mode, the
+## control socket is not required but can be useful for monitoring.
+ControlSocket /run/tor/control GroupWritable RelaxDirModeCheck
+ControlSocketsGroupWritable 1
+## Do NOT use ControlPort 9051 — TCP control ports are accessible to any
+## local process that authenticates. Use Unix socket only.
+
+## Authentication
+CookieAuthentication 1
+CookieAuthFileGroupReadable 1
+CookieAuthFile /run/tor/control.authcookie
+
+## Onion service (persistent, filesystem-managed by Tor)
+## Tor manages the key in HiddenServiceDir. FIPS reads the .onion
+## address from the hostname file at startup.
+HiddenServiceDir /var/lib/tor/fips_onion_service
+HiddenServicePort 8443 127.0.0.1:8443
+
+## Onion service hardening
+HiddenServiceMaxStreams 100
+HiddenServiceMaxStreamsCloseCircuit 1
+
+## Onion service DoS protection (Tor 0.4.8+)
+## Intro point rate limiting — prevents introduction cell floods.
+HiddenServiceEnableIntroDoSDefense 1
+HiddenServiceEnableIntroDoSRatePerSec 25
+HiddenServiceEnableIntroDoSBurstPerSec 200
+
+## Proof-of-work defense — auto-scaling computational puzzle for clients.
+## Minimal cost to legitimate peers, expensive for flood attacks.
+HiddenServicePoWDefensesEnabled 1
+HiddenServicePoWQueueRate 250
+HiddenServicePoWQueueBurst 2500
+
+## Security
+ExitRelay 0
+ExitPolicy reject *:*
+Sandbox 1
+VanguardsLiteEnabled 1
+ConnectionPadding 1
+SafeLogging 1
+
+## Logging
+Log notice syslog

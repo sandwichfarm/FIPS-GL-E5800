@@ -1,0 +1,1053 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      skip_integration:
+        description: "Skip integration tests"
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  checks: write
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  SOURCE_DATE_EPOCH: 0  # overridden per-step after checkout
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CI parity invariant
+#
+# This workflow's integration matrices — the `integration:` job, the
+# `dns-resolver:` job and the `deb-install:` job — and the local default suite
+# set (testing/ci-local.sh) MUST run the same integration suites, EXCEPT for
+# the deliberate local-only entries below. Adding a suite to one runner
+# without the other means "local green" and "GitHub green" stop being
+# equivalent.
+# testing/check-ci-parity.sh enforces this and fails on unexpected drift.
+#
+# Deliberate local-only (NOT on the GitHub gate), with reason:
+#   tor-socks5     — requires live Tor network; opt-in via --with-tor,
+#                    unreliable on GitHub-hosted runners.
+#   tor-directory  — same; live Tor dependency.
+#
+# Deliberate GitHub-only: the arm64 install leg (ubuntu22). The local host is
+# x86_64 and has no arm64 execution; the leg is compared by distribution only
+# and does not stand in for the amd64 leg of the same distribution.
+#
+# The two runners express the same work in different matrix shapes, and the
+# parity guard compares through that shape rather than around it: chaos legs
+# are compared per scenario (and per flag) via their `scenario:` field,
+# deb-install legs per distro. The one leg still compared at leg granularity
+# is dns-resolver — a single leg here, running all of its scenarios
+# internally, exactly as the local suite does.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Job 1 – Build matrix
+#
+# Builds on Linux x86_64, Linux aarch64, and macOS.
+# ─────────────────────────────────────────────────────────────────────────────
+jobs:
+  ci-parity:
+    name: CI parity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Install Python deps
+        run: pip3 install --quiet pyyaml
+      - name: Check local and GitHub runners cover the same work
+        run: bash testing/check-ci-parity.sh
+      - name: Check test log matchers against the strings src/ emits
+        run: python3 testing/check-log-strings.py
+      - name: Check no tested function's exit status is a log call's
+        run: python3 testing/check-trailing-log.py
+      - name: Check nothing resolves the shared mutable test image
+        run: bash testing/check-image-scoping.sh
+      - name: Check every action is pinned to a commit SHA
+        run: bash testing/check-action-pins.sh
+      - name: Check every source comment resolves in-repo
+        run: bash testing/check-comment-refs.sh
+      # Hermetic: synthetic ping functions, no containers, ~45s. Lives beside
+      # the other two so both runners gate on it identically — putting it in
+      # only one would create exactly the drift check-ci-parity.sh exists to
+      # catch, and it is invisible to that checker either way since it is not
+      # a matrix suite.
+      - name: Run convergence-gate unit tests
+        run: bash testing/lib/wait-converge-test.sh
+
+  fmt:
+    name: Format check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          components: rustfmt
+          cache: false
+          rustflags: ''
+      - run: cargo fmt --check
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          components: clippy
+          cache: false
+          rustflags: ''
+      - name: Cache Cargo registry + build
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-clippy-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+      - run: cargo clippy --all-targets --all-features -- -D warnings
+      # An optional feature means two source trees, and --all-features lints
+      # only one of them. The default build is what ships, so lint it
+      # explicitly: without this stage, code that compiles only with
+      # `profiling` enabled would pass CI while breaking every release build.
+      # Mirrored in testing/ci-local.sh — check-ci-parity.sh compares
+      # integration suites only and will not catch a stage added to one runner
+      # and not the other.
+      - name: Clippy (default features)
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Build with the tick-body profiler enabled
+        run: cargo build --workspace --features profiling
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Android cross-check
+  #
+  # FIPS runs on Android as an embedded library — the host app owns the TUN
+  # (an Android VpnService), so there are no daemon binaries to package, unlike
+  # the desktop targets. This job only cross-compiles the library for the
+  # android target to guard the android-only cfg paths (and the `not(android)`
+  # exclusions) from silently bit-rotting; nothing else in CI compiles them.
+  # cargo-ndk wires the NDK toolchain, which is required even for a check
+  # because `ring` compiles C at build time.
+  # ───────────────────────────────────────────────────────────────────────────
+  android-check:
+    name: Android cross-check (aarch64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Install Rust toolchain (+ Android target)
+        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          target: aarch64-linux-android
+          components: clippy
+          cache: false
+          rustflags: ''
+      - name: Cache Cargo registry + build
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-android-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+      - name: Install cargo-ndk
+        uses: taiki-e/install-action@fcf5432d9f50d67e37ee6e29bdb7a224ff67b4a7 # v2
+        with:
+          tool: cargo-ndk
+      - name: Clippy the library for Android
+        run: |
+          export ANDROID_NDK_HOME="${ANDROID_NDK_HOME:-$ANDROID_NDK_LATEST_HOME}"
+          cargo ndk -t arm64-v8a clippy --lib -- -D warnings
+
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+          - os: ubuntu-24.04-arm
+          - os: macos-latest
+          - os: windows-latest
+
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Set SOURCE_DATE_EPOCH from git (Unix)
+        if: runner.os != 'Windows'
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
+
+      - name: Set SOURCE_DATE_EPOCH from git (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $epoch = git log -1 --format=%ct
+          echo "SOURCE_DATE_EPOCH=$epoch" >> $env:GITHUB_ENV
+
+      - name: Install system dependencies (Linux only)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev nftables
+
+      - name: Validate fips.nft syntax (Linux only)
+        if: runner.os == 'Linux'
+        run: sudo nft -c -f packaging/common/fips.nft
+
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          cache: false
+          rustflags: ''
+
+      - name: Cache Cargo registry + build
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Build
+        # --bins --examples rather than the bare default: the native datagram
+        # API's echo server is a cargo example, and the integration image needs
+        # it. Naming --bins keeps the daemon and its tools in the build, which
+        # --examples alone would drop. Mirrors testing/ci-local.sh.
+        run: cargo build --release --bins --examples
+
+      - name: SHA-256 hashes (Linux)
+        if: runner.os == 'Linux'
+        run: sha256sum target/release/fips target/release/fipsctl target/release/fipstop target/release/fips-gateway
+
+      - name: SHA-256 hashes (macOS)
+        if: runner.os == 'macOS'
+        run: shasum -a 256 target/release/fips target/release/fipsctl target/release/fipstop
+
+      - name: SHA-256 hashes (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Get-FileHash target\release\fips.exe, target\release\fipsctl.exe, target\release\fipstop.exe -Algorithm SHA256
+
+      # Cargo puts an example under target/release/examples. Staging them
+      # beside the bins keeps the artifact's common root at target/release, so
+      # every existing consumer still finds its file at _bin/<name>.
+      - name: Stage the native API examples beside the release binaries
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          cp target/release/examples/native-echo target/release/native-echo
+          cp target/release/examples/native-surface target/release/native-surface
+
+      # Upload the Linux binary so integration jobs can use it without rebuilding
+      - name: Upload Linux binary
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: fips-linux
+          path: |
+            target/release/fips
+            target/release/fipsctl
+            target/release/fipstop
+            target/release/fips-gateway
+            target/release/native-echo
+            target/release/native-surface
+          retention-days: 1
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Job 2 – Unit tests
+#
+# Runs `cargo test` on Linux.  Gated on the build matrix completing so we
+# don't waste runner time if compilation is broken.
+# ─────────────────────────────────────────────────────────────────────────────
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    needs: [build]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Set SOURCE_DATE_EPOCH from git
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev
+
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          cache: false
+          rustflags: ''
+
+      - name: Cache Cargo registry + build
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Run unit tests
+        run: cargo nextest run --all --profile ci
+
+      - name: Publish test report (Checks tab)
+        uses: dorny/test-reporter@4a2e97665d5fa767581ef38eca97b9694bd4eef4 # v2
+        if: always()
+        with:
+          name: Unit Tests
+          path: target/nextest/ci/junit.xml
+          reporter: java-junit
+          fail-on-error: false
+
+      - name: Publish test report (run summary)
+        uses: mikepenz/action-junit-report@db71d41eb79864e25ab0337e395c352e84523afe # v4
+        if: always()
+        with:
+          report_paths: target/nextest/ci/junit.xml
+          check_name: Unit Tests Summary
+          fail_on_failure: false
+
+      # The `profiling` feature adds a module, a recorder and a writer thread
+      # that the default-feature run above never compiles, so its own tests do
+      # not execute there. Mirrored in testing/ci-local.sh.
+      - name: Run library tests with the tick-body profiler enabled
+        run: cargo test --lib --features profiling
+
+      # Debug-only helpers (anything behind #[cfg(debug_assertions)]) vanish in
+      # a release build, so a test calling one without the same gate breaks a
+      # build no other job performs: every run above compiles the test target
+      # in debug. Compile it in release too, without running it — the point is
+      # that it builds at all. Mirrored in testing/ci-local.sh.
+      - name: Compile the library tests in release mode
+        run: cargo test --release --lib --no-run
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Job 2b – Unit tests (macOS)
+# ─────────────────────────────────────────────────────────────────────────────
+  test-macos:
+    name: Unit tests (macOS)
+    runs-on: macos-latest
+    needs: [build]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Set SOURCE_DATE_EPOCH from git
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
+
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          cache: false
+          rustflags: ''
+
+      - name: Cache Cargo registry + build
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Run unit tests
+        run: cargo nextest run --all --profile ci
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Job 2c – Unit tests (Windows)
+# ─────────────────────────────────────────────────────────────────────────────
+  test-windows:
+    name: Unit tests (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          cache: false
+          rustflags: ''
+
+      - name: Cache Cargo registry + build
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Run unit tests
+        run: cargo nextest run --all --profile ci
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Job 2d – PowerShell lint (Windows packaging scripts)
+#
+# Runs PSScriptAnalyzer against the operator-facing installer/build
+# scripts shipped in the Windows ZIP package. Settings live in
+# packaging/windows/PSScriptAnalyzerSettings.psd1 (each suppressed rule
+# is documented there). Pre-installed on windows-latest runners; no
+# Install-Module step needed.
+# ─────────────────────────────────────────────────────────────────────────────
+  windows-lint:
+    name: PowerShell lint (Windows packaging)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Run PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          $results = Invoke-ScriptAnalyzer `
+            -Path packaging/windows/*.ps1 `
+            -Settings packaging/windows/PSScriptAnalyzerSettings.psd1
+          if ($results) {
+            $results | Format-Table -AutoSize
+            Write-Error "PSScriptAnalyzer found $($results.Count) issue(s)"
+            exit 1
+          } else {
+            Write-Host "PSScriptAnalyzer: no issues"
+          }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Job 2e – OpenWrt maintainer-script scenarios
+#
+# Runs the package's postinst/prerm and the fips-gateway init script under ash
+# in a busybox container, against stubbed init scripts: a fresh install, an
+# upgrade from a released package, an upgrade from a package carrying these
+# scripts with the gateway enabled and with it disabled, a removal, and the
+# init script's gateway.enabled guard.
+#
+# A job of its own rather than a leg of the integration matrix: it needs no
+# FIPS binary and no shared test image, so as an integration leg it would wait
+# on the build and then download and build both for nothing.
+#
+# The leg keeps `suite:` because testing/check-ci-parity.sh matches it against
+# OPENWRT_SUITES in ci-local.sh; the step below does not read it.
+# ─────────────────────────────────────────────────────────────────────────────
+  openwrt-scripts:
+    name: OpenWrt scripts (${{ matrix.suite }})
+    runs-on: ubuntu-latest
+    if: ${{ !inputs.skip_integration }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suite: openwrt-scripts
+
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Run the OpenWrt maintainer-script scenarios
+        timeout-minutes: 5
+        run: bash testing/openwrt/maintainer-scripts-test.sh
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Job 3 – Integration tests (static mesh + chaos simulation)
+#
+# Runs only when both build and test succeed.  Each topology / scenario is a
+# separate matrix entry so they run in parallel.
+#
+# All harnesses share a single Docker image (fips-test:latest) built once
+# in the setup step from testing/docker/.
+# ─────────────────────────────────────────────────────────────────────────────
+  integration:
+    name: Integration (${{ matrix.suite }})
+    runs-on: ubuntu-latest
+    needs: [build, test]
+    if: ${{ !inputs.skip_integration }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ── Static mesh topologies ─────────────────────────────────────────
+          - suite: static-mesh
+            type: static
+            topology: mesh
+          - suite: static-chain
+            type: static
+            topology: chain
+          # ── Firewall baseline (fips0 nftables default-deny) ────────────
+          - suite: firewall
+            type: firewall
+          # ── Outbound LAN gateway integration test ──────────────────────
+          - suite: gateway
+            type: gateway
+            topology: gateway
+          # ── Chaos / stochastic scenarios ───────────────────────────────────
+          - suite: churn-mixed-10
+            type: chaos
+            scenario: churn-mixed
+            chaos_flags: "--nodes 10 --duration 120"
+          - suite: ethernet-mesh
+            type: chaos
+            scenario: ethernet-mesh
+          - suite: ethernet-only
+            type: chaos
+            scenario: ethernet-only
+          - suite: tcp-mesh
+            type: chaos
+            scenario: tcp-mesh
+          - suite: congestion-stress
+            type: chaos
+            scenario: congestion-stress
+          # ── Sidecar deployment ──────────────────────────────────────────
+          - suite: sidecar
+            type: sidecar
+          # ── NAT traversal lab (Nostr/STUN UDP hole punch) ───────────────
+          - suite: nat-cone
+            type: nat
+            scenario: cone
+          - suite: nat-symmetric
+            type: nat
+            scenario: symmetric
+          - suite: nat-lan
+            type: nat
+            scenario: lan
+          # ── Nostr overlay advert publish/consume round-trip ─────────────
+          # Two FIPS daemons + the existing strfry relay; covers Phase 1
+          # (A→B publish/consume), Phase 2 (B→A reverse), and Phase 3
+          # (malformed advert injected to relay; consumers must reject
+          # without crashing). UDP transport baseline for v0.3.0.
+          - suite: nostr-publish-consume
+            type: nostr-publish-consume
+          # ── STUN fault-injection ───────────────────────────────────────
+          # One FIPS daemon + a netns-sharing shim that injects tc/iptables
+          # faults against UDP egress to the in-lab STUN server. Three
+          # phases: 100% drop, ~5s delay then clear, then full STUN
+          # container kill. Asserts the daemon notices each fault,
+          # recovers from delay, and never panics.
+          - suite: stun-faults
+            type: stun-faults
+          # Native datagram API: a client process opening a pubkey-to-pubkey
+          # flow over the daemon's Unix socket. One single-node leg covering
+          # the socket, its access mode and the command surface, plus a
+          # two-node pair that sends a real datagram end to end. Fast: no
+          # per-distro images and no TUN. ~2-3 min.
+          - suite: native-api
+            type: native-api
+
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      # Fetch the pre-built Linux binary from job 1
+      - name: Download Linux binary
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: fips-linux
+          path: _bin
+
+      # Install binaries to unified docker context and build shared image
+      - name: Install binaries and build Docker image
+        run: |
+          chmod +x _bin/fips _bin/fipsctl
+          [ -f _bin/fipstop ] && chmod +x _bin/fipstop || true
+          [ -f _bin/fips-gateway ] && chmod +x _bin/fips-gateway || true
+          cp _bin/fips    testing/docker/fips
+          cp _bin/fipsctl testing/docker/fipsctl
+          [ -f _bin/fipstop ] && cp _bin/fipstop testing/docker/fipstop || true
+          [ -f _bin/fips-gateway ] && cp _bin/fips-gateway testing/docker/fips-gateway || true
+          # Not optional: the Dockerfile COPYs both native API examples
+          # unconditionally, and a missing source there fails the shared image
+          # build for every leg, not just native-api. Fail here instead, where
+          # the cause is legible.
+          chmod +x _bin/native-echo _bin/native-surface
+          cp _bin/native-echo testing/docker/native-echo
+          cp _bin/native-surface testing/docker/native-surface
+          # Retried: both builds pull from Docker Hub and the Debian mirrors.
+          source testing/lib/image-build.sh
+          retry_build "docker build fips-test" docker build -t fips-test:latest testing/docker
+          retry_build "docker build fips-test-app" docker build -t fips-test-app:latest -f testing/docker/Dockerfile.app testing/docker
+
+      # ── Static topology ────────────────────────────────────────────────────
+      - name: Generate configs (static)
+        if: matrix.type == 'static'
+        run: bash testing/static/scripts/generate-configs.sh ${{ matrix.topology }}
+
+      - name: Start containers (static)
+        if: matrix.type == 'static'
+        run: |
+          docker compose -f testing/static/docker-compose.yml \
+            --profile ${{ matrix.topology }} up -d
+
+      - name: Run ping test (static)
+        if: matrix.type == 'static'
+        run: bash testing/static/scripts/ping-test.sh ${{ matrix.topology }}
+
+      - name: Collect logs on failure (static)
+        if: matrix.type == 'static' && failure()
+        run: |
+          docker compose -f testing/static/docker-compose.yml \
+            --profile ${{ matrix.topology }} logs --no-color
+
+      - name: Stop containers (static)
+        if: matrix.type == 'static' && always()
+        run: |
+          docker compose -f testing/static/docker-compose.yml \
+            --profile ${{ matrix.topology }} down --volumes --remove-orphans
+
+      # ── Firewall baseline integration test ─────────────────────────────────
+      - name: Run firewall baseline integration test
+        if: matrix.type == 'firewall'
+        run: bash testing/firewall/test.sh --skip-build --keep-up
+
+      - name: Collect logs on failure (firewall)
+        if: matrix.type == 'firewall' && failure()
+        run: |
+          docker compose -f testing/firewall/docker-compose.yml logs --no-color
+          docker exec fips-fw-container-b nft list table inet fips || true
+
+      - name: Stop containers (firewall)
+        if: matrix.type == 'firewall' && always()
+        run: |
+          docker compose -f testing/firewall/docker-compose.yml down --volumes --remove-orphans
+
+      # ── Chaos simulation ───────────────────────────────────────────────────
+      - name: Install Python deps (chaos)
+        if: matrix.type == 'chaos'
+        run: pip3 install --quiet pyyaml jinja2
+
+      # With FIPS_TEST_IMAGE set, the chaos runner uses the image the job built
+      # above instead of building fips-test:latest again (testing/chaos/sim/runner.py).
+      - name: Run chaos scenario
+        if: matrix.type == 'chaos'
+        env:
+          FIPS_TEST_IMAGE: fips-test:latest
+        run: bash testing/chaos/scripts/chaos.sh ${{ matrix.scenario }} ${{ matrix.chaos_flags }}
+
+      - name: Upload sim results on failure (chaos)
+        if: matrix.type == 'chaos' && failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: sim-results-${{ matrix.scenario }}
+          path: testing/chaos/sim-results/
+          retention-days: 7
+
+      # ── Sidecar deployment ──────────────────────────────────────────────
+      - name: Run sidecar integration test
+        if: matrix.type == 'sidecar'
+        run: bash testing/sidecar/scripts/test-sidecar.sh --skip-build
+
+      - name: Collect logs on failure (sidecar)
+        if: matrix.type == 'sidecar' && failure()
+        run: |
+          for node in a b c; do
+            echo "--- sidecar-${node} logs ---"
+            docker logs "sidecar-${node}-fips-1" 2>&1 || true
+            echo ""
+          done
+
+      # ── NAT traversal lab ───────────────────────────────────────────────
+      - name: Run NAT lab scenario
+        if: matrix.type == 'nat'
+        run: bash testing/nat/scripts/nat-test.sh ${{ matrix.scenario }}
+
+      - name: Collect logs on failure (nat)
+        if: matrix.type == 'nat' && failure()
+        run: |
+          docker compose -f testing/nat/docker-compose.yml \
+            --profile ${{ matrix.scenario }} logs --no-color
+
+      - name: Stop containers (nat)
+        if: matrix.type == 'nat' && always()
+        run: |
+          docker compose -f testing/nat/docker-compose.yml \
+            --profile cone --profile symmetric --profile lan \
+            down --volumes --remove-orphans
+
+      # ── Nostr overlay advert publish/consume ───────────────────────────
+      - name: Run Nostr publish/consume test
+        if: matrix.type == 'nostr-publish-consume'
+        run: bash testing/nat/scripts/nostr-relay-test.sh
+
+      - name: Collect logs on failure (nostr-publish-consume)
+        if: matrix.type == 'nostr-publish-consume' && failure()
+        run: |
+          docker compose -f testing/nat/docker-compose.yml \
+            --profile nostr-publish-consume logs --no-color | tail -300
+
+      - name: Stop containers (nostr-publish-consume)
+        if: matrix.type == 'nostr-publish-consume' && always()
+        run: |
+          docker compose -f testing/nat/docker-compose.yml \
+            --profile nostr-publish-consume down --volumes --remove-orphans
+
+      # ── STUN fault-injection ───────────────────────────────────────────
+      - name: Run STUN fault-injection test
+        if: matrix.type == 'stun-faults'
+        run: bash testing/nat/scripts/stun-faults-test.sh
+
+      - name: Collect logs on failure (stun-faults)
+        if: matrix.type == 'stun-faults' && failure()
+        run: |
+          docker compose -f testing/nat/docker-compose.yml \
+            --profile stun-faults logs --no-color | tail -300
+
+      - name: Stop containers (stun-faults)
+        if: matrix.type == 'stun-faults' && always()
+        run: |
+          docker compose -f testing/nat/docker-compose.yml \
+            --profile stun-faults down --volumes --remove-orphans
+
+      # ── Outbound LAN gateway integration test ──────────────────────────
+      - name: Generate configs (gateway)
+        if: matrix.type == 'gateway'
+        run: bash testing/static/scripts/generate-configs.sh gateway gateway-test
+
+      - name: Inject gateway config (gateway)
+        if: matrix.type == 'gateway'
+        run: bash testing/static/scripts/gateway-test.sh inject-config
+
+      - name: Start containers (gateway)
+        if: matrix.type == 'gateway'
+        run: |
+          docker compose -f testing/static/docker-compose.yml \
+            --profile gateway up -d
+
+      - name: Run gateway test
+        if: matrix.type == 'gateway'
+        run: bash testing/static/scripts/gateway-test.sh
+
+      - name: Collect logs on failure (gateway)
+        if: matrix.type == 'gateway' && failure()
+        run: |
+          docker compose -f testing/static/docker-compose.yml \
+            --profile gateway logs --no-color | tail -300
+
+      - name: Stop containers (gateway)
+        if: matrix.type == 'gateway' && always()
+        run: |
+          docker compose -f testing/static/docker-compose.yml \
+            --profile gateway down --volumes --remove-orphans
+
+      # ── Native datagram API ─────────────────────────────────────────────
+      # Reads FIPS_TEST_IMAGE rather than defaulting to a name, so it runs
+      # against the image this workflow built. The two-node check creates and
+      # removes its own docker network.
+      - name: Run native-api test
+        if: matrix.type == 'native-api'
+        timeout-minutes: 15
+        env:
+          FIPS_TEST_IMAGE: fips-test:latest
+        run: bash testing/native-api/test.sh
+
+      - name: Collect logs on failure (native-api)
+        if: matrix.type == 'native-api' && failure()
+        run: |
+          docker ps -a --filter "name=fips-native" --format '{{.Names}}' | while read -r c; do
+            echo "--- ${c} ---"
+            docker logs "$c" 2>&1 | tail -100 || true
+          done
+
+      - name: Stop containers (native-api)
+        if: matrix.type == 'native-api' && always()
+        run: |
+          docker ps -a --filter "name=fips-native" --format '{{.Names}}' | while read -r c; do
+            docker rm -f "$c" >/dev/null 2>&1 || true
+          done
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Job 4 – The .deb the install suite installs
+#
+# Built once, here, by the same script the release workflow and a local run
+# call, so the package the suite installs is built the way the shipped one is.
+# Two jobs consume it: the install legs install it, and the dns-resolver job
+# runs its binaries.
+# That was not true before: each install leg built its own package on a fresh
+# runner with no cache, so one run performed five complete Rust release builds
+# and four were waste — and none of them was built the way the release is, so
+# the suite could not exhibit a defect that only the release environment
+# produced.
+#
+# The script builds in the pinned container from packaging/build-floor.env and
+# runs testing/check-glibc-floor.sh on the result, so this job is also where a
+# floor violation stops the run.
+# ─────────────────────────────────────────────────────────────────────────────
+  deb-package:
+    name: Build .deb${{ matrix.deb_arch == 'arm64' && ' (arm64)' || '' }}
+    runs-on: ${{ matrix.os }}
+    needs: [build, test]
+    if: ${{ !inputs.skip_integration }}
+
+    # The arm64 leg builds natively on an arm runner so the arm64 package the
+    # release ships is install-tested too (job 5). Being one job, both legs
+    # gate job 5 and the dns-resolver job: an arm64 build failure skips the
+    # amd64 install legs on that run as well.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            deb_arch: amd64
+          - os: ubuntu-24.04-arm
+            deb_arch: arm64
+
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      # The builder image travels between runners through the Actions cache,
+      # keyed on the image tag the script computes, so any change that would
+      # rebuild the image locally (base image, toolchain, Dockerfile.build)
+      # also misses here and cannot pick up a stale image. Every run restores;
+      # only a push to maint, master or next saves, because the cache is
+      # scoped per ref and an entry saved by a pull request or a topic branch
+      # could be read by nothing else while it pushed the cargo caches toward
+      # the repository's size limit. Topic branches and pull requests read the
+      # default branch's entry. What this gives up: an image restored from the
+      # cache is not rebuilt, so, as on a developer's machine, apt and the
+      # ubuntu:22.04 base are not refreshed until one of the tag's inputs
+      # changes. The image carries build tools only, and the glibc floor and
+      # Depends checks still run on every package.
+      - name: Resolve the builder image cache key
+        id: builder
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag=$(bash packaging/debian/build-deb-container.sh --print-image-tag)
+          [ -n "$tag" ]
+          echo "key=deb-builder-${{ runner.arch }}-${tag//:/-}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the builder image
+        id: builder-restore
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ runner.temp }}/deb-builder-image.tar
+          key: ${{ steps.builder.outputs.key }}
+
+      # The package path is the script's last line of stdout. A leg that
+      # produced the other architecture's package goes red here rather than
+      # handing an amd64 package to the arm64 install leg.
+      - name: Build the .deb in the pinned build container
+        timeout-minutes: 30
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash packaging/debian/build-deb-container.sh --output-dir deploy \
+            --image-archive "$RUNNER_TEMP/deb-builder-image.tar" \
+            | tee "$RUNNER_TEMP/build-deb-container.log"
+          deb=$(tail -n 1 "$RUNNER_TEMP/build-deb-container.log")
+          [ -f "$deb" ] || { echo "build-deb-container.sh did not name a package: '$deb'" >&2; exit 1; }
+          case "$deb" in
+            *_${{ matrix.deb_arch }}.deb) ;;
+            *) echo "Package $deb is not ${{ matrix.deb_arch }}" >&2; exit 1 ;;
+          esac
+
+      # On a cache miss the archive exists only if the script built the image
+      # and saved it, so its presence is what says there is something to save.
+      # A failed build skips this and the save, so no image is cached from a
+      # job that did not produce a package.
+      - name: Check for a new builder image archive
+        id: builder-archive
+        shell: bash
+        run: |
+          if [ -f "$RUNNER_TEMP/deb-builder-image.tar" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Save the builder image
+        if: >-
+          github.event_name == 'push'
+          && contains(fromJSON('["refs/heads/maint", "refs/heads/master", "refs/heads/next"]'), github.ref)
+          && steps.builder-restore.outputs.cache-hit != 'true'
+          && steps.builder-archive.outputs.present == 'true'
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ runner.temp }}/deb-builder-image.tar
+          key: ${{ steps.builder.outputs.key }}
+
+      - name: Upload the .deb
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: fips-deb-${{ matrix.deb_arch }}
+          path: deploy/fips_*_${{ matrix.deb_arch }}.deb
+          if-no-files-found: error
+          retention-days: 1
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DNS resolver multi-backend coverage
+#
+# Exercises every fips-dns-setup backend (resolved, dnsmasq, NM+dnsmasq,
+# dns-delegate, no-resolver) across five distros, plus end-to-end scenarios
+# that boot a real fips daemon with a real TUN and assert
+# `dig @127.0.0.53 AAAA <npub>.fips` returns AAAA. Pins the production DNS bind
+# path where a loopback-delivered query was once misattributed to the mesh
+# interface and dropped. One leg runs all 13 scenarios sequentially.
+#
+# A job of its own rather than a leg of the integration matrix: its e2e
+# scenarios run the binaries from the package job 4 built, whose glibc floor is
+# low enough for all five distros. The fips-linux artifact from job 1 is built
+# on the newest runner and would not start on the older ones, and the suite
+# used to compile a second copy itself, cold, on every run. The cost of the
+# dependency: when the package build fails, the eight scenarios that need no
+# binary are skipped along with the five that do.
+#
+# The leg keeps `suite:` so testing/check-ci-parity.sh matches it against
+# DNS_RESOLVER_SUITES in ci-local.sh, and `name:` keeps the check's displayed
+# name `Integration (dns-resolver)`.
+# ─────────────────────────────────────────────────────────────────────────────
+  dns-resolver:
+    name: Integration (${{ matrix.suite }})
+    runs-on: ubuntu-latest
+    needs: [deb-package]
+    if: ${{ !inputs.skip_integration }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suite: dns-resolver
+
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Download the .deb
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: fips-deb-amd64
+          path: _deb
+
+      - name: Run dns-resolver test
+        timeout-minutes: 30
+        run: |
+          deb=$(find _deb -maxdepth 1 -type f -name 'fips_*.deb' | sort | head -1)
+          [ -n "$deb" ] || { echo "no .deb in the downloaded artifact" >&2; exit 1; }
+          bash testing/dns-resolver/test.sh --deb "$deb"
+
+      - name: Collect logs on failure
+        if: failure()
+        run: |
+          docker ps -a --filter "name=fips-dns-test-" --format '{{.Names}}' | while read -r c; do
+            echo "--- ${c} fips.service ---"
+            docker exec "$c" journalctl -u fips.service --no-pager 2>&1 | tail -100 || true
+            echo "--- ${c} fips-dns.service ---"
+            docker exec "$c" journalctl -u fips-dns.service --no-pager 2>&1 | tail -100 || true
+          done
+
+      - name: Stop containers
+        if: always()
+        run: |
+          docker ps -a --filter "name=fips-dns-test-" --format '{{.Names}}' | while read -r c; do
+            docker rm -f "$c" >/dev/null 2>&1 || true
+          done
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Job 5 – Real-deb install across target distros
+#
+# Boots a systemd container per distro (not privileged), runs `apt install
+# ./fips_*.deb` with the package job 4 built, then asserts end-to-end `.fips`
+# resolution + the gateway/daemon default-pairing. The most thorough single
+# test surface — exercises packaging, maintainer scripts, systemd unit
+# ordering, real TUN, and the DNS responder filter on a per-distro resolver
+# backend.
+#
+# A job of its own rather than legs of the integration matrix: only these legs
+# and the dns-resolver job need the package, and as integration legs every
+# other integration suite would wait on the package build.
+#
+# The legs keep `type: deb-install` and `scenario:` because
+# testing/check-ci-parity.sh reads those to match this matrix against the local
+# suite's distro list; it reads `arch:` too, and compares only the amd64 legs
+# with the local run. The steps below use `scenario:` and `arch:`.
+# ─────────────────────────────────────────────────────────────────────────────
+  deb-install:
+    name: Deb install (${{ matrix.scenario }}${{ matrix.arch == 'arm64' && ' arm64' || '' }})
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    needs: [deb-package]
+    if: ${{ !inputs.skip_integration }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - type: deb-install
+            scenario: debian12
+            arch: amd64
+          - type: deb-install
+            scenario: debian13
+            arch: amd64
+          - type: deb-install
+            scenario: ubuntu22
+            arch: amd64
+          - type: deb-install
+            scenario: ubuntu24
+            arch: amd64
+          - type: deb-install
+            scenario: ubuntu26
+            arch: amd64
+          # The arm64 package on the oldest supported distribution: the install
+          # scenario, which covers a fresh install, a daemon start and a purge
+          # of the DNS routing. Deliberately GitHub-only (the local host is
+          # x86_64), and deliberately one leg: the upgrade and conffile paths,
+          # including the upgrade scenario's own purge, run under debian12 on
+          # amd64 only and stay unexercised on arm64.
+          - type: deb-install
+            scenario: ubuntu22
+            arch: arm64
+
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Download the .deb
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: fips-deb-${{ matrix.arch }}
+          path: _deb
+
+      - name: Run deb-install scenario
+        timeout-minutes: 25
+        run: |
+          deb=$(find _deb -maxdepth 1 -type f -name 'fips_*.deb' | sort | head -1)
+          [ -n "$deb" ] || { echo "no .deb in the downloaded artifact" >&2; exit 1; }
+          bash testing/deb-install/test.sh --deb "$deb" ${{ matrix.scenario }}
+
+      - name: Collect logs on failure
+        if: failure()
+        run: |
+          docker ps -a --filter "name=fips-deb-test-${{ matrix.scenario }}" --format '{{.Names}}' | while read -r c; do
+            echo "--- ${c} fips.service ---"
+            docker exec "$c" journalctl -u fips.service --no-pager 2>&1 | tail -100 || true
+            echo "--- ${c} fips-dns.service ---"
+            docker exec "$c" journalctl -u fips-dns.service --no-pager 2>&1 | tail -100 || true
+            echo "--- ${c} fips-gateway.service ---"
+            docker exec "$c" journalctl -u fips-gateway.service --no-pager 2>&1 | tail -100 || true
+          done
+
+      - name: Stop containers
+        if: always()
+        run: |
+          docker ps -a --filter "name=fips-deb-test-${{ matrix.scenario }}" --format '{{.Names}}' | while read -r c; do
+            docker rm -f "$c" >/dev/null 2>&1 || true
+          done

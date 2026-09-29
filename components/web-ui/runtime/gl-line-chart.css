@@ -1,0 +1,32 @@
+.gl-sdk4-chart {
+  position: relative;
+  min-width: 0;
+}
+
+.gl-sdk4-chart__bands {
+  position: absolute;
+  z-index: 2;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.gl-sdk4-chart__band {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  min-width: 2px;
+  border-right: 1px solid rgba(232, 162, 58, 0.42);
+  border-left: 1px solid rgba(232, 162, 58, 0.42);
+  background: rgba(232, 162, 58, 0.12);
+}
+
+.gl-sdk4-chart__band.is-critical {
+  border-color: rgba(227, 93, 106, 0.52);
+  background: rgba(227, 93, 106, 0.16);
+}
+
+.gl-sdk4-chart__band.is-advisory,
+.gl-sdk4-chart__band.is-info {
+  border-color: rgba(132, 145, 163, 0.35);
+  background: rgba(132, 145, 163, 0.1);
+}

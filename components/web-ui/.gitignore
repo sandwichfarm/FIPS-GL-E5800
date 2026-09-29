@@ -1,0 +1,7 @@
+node_modules/
+dist/
+*.gz
+.DS_Store
+extracted-components.json
+.glpluginrc.json
+.cache/

@@ -1,0 +1,13 @@
+[Unit]
+Description=Configure DNS routing for .fips domain
+After=fips.service
+Requires=fips.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/fips/fips-dns-setup
+ExecStop=/usr/lib/fips/fips-dns-teardown
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

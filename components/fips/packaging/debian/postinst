@@ -1,0 +1,190 @@
+#!/bin/sh
+# FIPS post-install script for Debian/Ubuntu
+set -e
+
+# How long the upgrade path waits for each unit it starts. A bound rather than
+# a blocking `systemctl start`: a unit that Requires= a daemon which never comes
+# up has a start job that is never dispatched, and a blocking start on it never
+# returns, which held apt, and every package operation queued behind it, for
+# ever.
+UNIT_START_LIMIT=60
+# fips-gateway.service waits up to 30s in ExecStartPre for fips0, behind a
+# daemon that has only just been started, so it gets longer.
+GATEWAY_START_LIMIT=90
+
+# Set when the daemon or fips-dns does not come up on upgrade; checked at the
+# end.
+start_failed=""
+
+# Queue a start (or restart) of a unit and wait, up to a bound, for it to become
+# active. Returns:
+#   0  the unit is active and no job for it is still queued;
+#   2  the unit was left inactive on purpose, because it is masked or because
+#      a Condition in it is not met, which is a skip, not a failure;
+#   1  the job could not be queued, the unit failed, or it did not become
+#      active in time, after printing the unit's status.
+#
+# Active has to hold on two consecutive polls with no job pending: fips.service
+# is Type=simple, so it reads active for an instant after the fork even when
+# the exec then fails, and a unit being restarted reads active on its old
+# process until the queued job runs.
+unit_bounded() {
+    verb="$1"
+    unit="$2"
+    limit="$3"
+
+    case "$(systemctl is-enabled "$unit" 2>/dev/null || true)" in
+        masked | masked-runtime)
+            echo "fips: $unit is masked; not starting it"
+            return 2
+            ;;
+    esac
+
+    # The condition result is only evidence about this start once the unit has
+    # evaluated its conditions again, so remember when it last did.
+    cond_before=$(systemctl show -p ConditionTimestampMonotonic --value "$unit" 2>/dev/null || true)
+
+    if ! systemctl "$verb" --no-block "$unit"; then
+        echo "fips: could not queue $verb of $unit" >&2
+        return 1
+    fi
+
+    seen=0
+    waited=0
+    while [ "$waited" -lt "$limit" ]; do
+        sleep 1
+        waited=$((waited + 1))
+        if systemctl is-active --quiet "$unit" &&
+            [ -z "$(systemctl show -p Job --value "$unit" 2>/dev/null)" ]; then
+            seen=$((seen + 1))
+            if [ "$seen" -ge 2 ]; then
+                return 0
+            fi
+            continue
+        fi
+        seen=0
+        job=$(systemctl show -p Job --value "$unit" 2>/dev/null || true)
+        state=$(systemctl show -p ActiveState --value "$unit" 2>/dev/null || true)
+        if [ -z "$job" ] && [ "$state" = "failed" ]; then
+            echo "fips: $unit failed to start" >&2
+            systemctl status --no-pager --lines=15 "$unit" >&2 || true
+            return 1
+        fi
+        cond_now=$(systemctl show -p ConditionTimestampMonotonic --value "$unit" 2>/dev/null || true)
+        if [ "$cond_now" != "$cond_before" ] &&
+            [ "$(systemctl show -p ConditionResult --value "$unit" 2>/dev/null)" = "no" ]; then
+            echo "fips: $unit was skipped because a condition in the unit is not met"
+            return 2
+        fi
+    done
+
+    echo "fips: $unit did not become active within ${limit}s" >&2
+    systemctl status --no-pager --lines=15 "$unit" >&2 || true
+    return 1
+}
+
+case "$1" in
+    configure)
+        # Create fips system group for control socket access
+        if ! getent group fips >/dev/null 2>&1; then
+            groupadd --system fips
+        fi
+
+        # Seed /etc/fips/fips.yaml from the shipped example only if it
+        # does not already exist. The live config is no longer a dpkg
+        # conf-file; this copy-if-absent yields to any operator- or
+        # configuration-management-rendered file and never clobbers it.
+        if [ ! -e /etc/fips/fips.yaml ]; then
+            install -m 600 -o root -g root \
+                /usr/share/fips/fips.yaml.example \
+                /etc/fips/fips.yaml
+        fi
+
+        # Drop-in directory for operator nftables rules included by
+        # /etc/fips/fips.nft. Empty by default; the include glob matches
+        # nothing cleanly out of the box.
+        if [ ! -d /etc/fips/fips.d ]; then
+            mkdir -p /etc/fips/fips.d
+            chmod 755 /etc/fips/fips.d
+        fi
+
+        # Ensure runtime directory exists with correct ownership
+        if [ -d /run/systemd/system ]; then
+            systemd-tmpfiles --create /usr/lib/tmpfiles.d/fips.conf 2>/dev/null || true
+        fi
+
+        # Reload systemd and enable services. fips-firewall.service is
+        # intentionally NOT enabled here — operators opt in explicitly
+        # with `systemctl enable --now fips-firewall.service`. See
+        # /usr/share/doc/fips/fips-security.md for the rationale.
+        if [ -d /run/systemd/system ]; then
+            systemctl daemon-reload
+            systemctl enable fips.service 2>/dev/null || true
+            systemctl enable fips-dns.service 2>/dev/null || true
+
+            # On upgrade, restart services that were running before. Each
+            # start is bounded, and a daemon or fips-dns that does not come up
+            # fails the install with its status printed, rather than holding
+            # apt. When the daemon does not come up the units that require it
+            # are not started: each would only wait out its own bound behind
+            # it. A daemon that was skipped (masked, or its condition not met)
+            # is not a failure, but the units that require it are not started
+            # either.
+            if [ -n "$2" ]; then
+                # Reapply the firewall ruleset in place, before the daemon
+                # starts, and only where the operator has it running: "try"
+                # leaves a unit that is not active alone, so this never opts
+                # a host in. The daemon-reload above has loaded the unit's
+                # ExecReload, so this reloads rather than restarts; a restart
+                # would run ExecStop, which deletes the table. A reload that
+                # fails leaves the previous ruleset loaded, so it is reported
+                # and the upgrade goes on.
+                if ! systemctl try-reload-or-restart fips-firewall.service; then
+                    echo "fips: reloading fips-firewall.service failed; the ruleset loaded before the upgrade stays in force" >&2
+                    echo "fips: check /etc/fips/fips.nft and the rules in /etc/fips/fips.d/" >&2
+                fi
+
+                daemon_rc=0
+                unit_bounded start fips.service "$UNIT_START_LIMIT" || daemon_rc=$?
+                if [ "$daemon_rc" -eq 1 ]; then
+                    start_failed=1
+                elif [ "$daemon_rc" -eq 2 ]; then
+                    echo "fips: fips.service is not running, so the units that require it were not started"
+                elif [ "$daemon_rc" -eq 0 ] &&
+                    systemctl is-enabled --quiet fips-dns.service 2>/dev/null; then
+                    dns_rc=0
+                    unit_bounded start fips-dns.service "$UNIT_START_LIMIT" || dns_rc=$?
+                    [ "$dns_rc" -ne 1 ] || start_failed=1
+                fi
+
+                # prerm stopped the gateway; bring it back only where the
+                # operator enabled it, so an upgrade never turns it on. A
+                # restart rather than a start, so a gateway that an older
+                # prerm left running also moves onto the new binary. The
+                # gateway is an opt-in addition to a daemon that is running,
+                # so one that does not come up is reported, with its status,
+                # and does not fail the upgrade.
+                if [ "$daemon_rc" -eq 0 ] &&
+                    systemctl is-enabled --quiet fips-gateway.service 2>/dev/null; then
+                    gw_rc=0
+                    unit_bounded restart fips-gateway.service "$GATEWAY_START_LIMIT" || gw_rc=$?
+                    if [ "$gw_rc" -eq 1 ]; then
+                        echo "fips: fips-gateway.service did not come back after the upgrade; the daemon did" >&2
+                    fi
+                fi
+            fi
+        fi
+        ;;
+esac
+
+#DEBHELPER#
+
+# Fail the configure step only here, after everything else has run, so a unit
+# that did not come up leaves the package half-configured and apt non-zero.
+if [ -n "$start_failed" ]; then
+    echo "fips: the upgrade is installed but its services did not all start;" >&2
+    echo "fips: fix the cause above, then run: dpkg --configure -a" >&2
+    exit 1
+fi
+
+exit 0

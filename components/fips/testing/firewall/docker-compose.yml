@@ -1,0 +1,66 @@
+networks:
+  # No subnet is requested: docker assigns one from the daemon's address pool.
+  # A fixed request is honoured verbatim, so two runs asking for the same range
+  # collide on "Pool overlaps" — which is why the generated peer addresses are
+  # docker hostnames (host-a, host-b) rather than literal IPs. Docker's embedded
+  # DNS is per-network, so the same hostname in two concurrent runs resolves
+  # inside each run's own subnet.
+  #
+  # That removes one of the two obstacles to running this suite twice at once,
+  # not both. The compose project name is still fixed, so two runs that do not
+  # set COMPOSE_PROJECT_NAME share a project, and the second `up` recreates the
+  # first's containers while either `down` removes both. The local CI runner
+  # scopes it externally (run_firewall in ci-local.sh); a bare hand run does
+  # not. Do not read the floating subnet as making concurrent bare runs safe.
+  fw-net:
+    driver: bridge
+    labels:
+      - "com.corganlabs.fips-ci=1"
+
+x-fips-common: &fips-common
+  build:
+    # The harness scopes its build context per run and passes it here; the
+    # shared directory is the hand-run default. Compose resolves a relative
+    # value against THIS file's directory, so the harness must export an
+    # absolute path.
+    context: ${FIPS_BUILD_CONTEXT:-../docker}
+  image: ${FIPS_TEST_IMAGE:-fips-test:latest}
+  entrypoint: ["/usr/local/bin/entrypoint.sh"]
+  cap_add:
+    - NET_ADMIN
+    - NET_RAW
+  devices:
+    - /dev/net/tun:/dev/net/tun
+  sysctls:
+    - net.ipv6.conf.all.disable_ipv6=0
+  restart: "no"
+  environment:
+    - FIPS_TEST_MODE=default
+    - RUST_LOG=info,fips::node=debug
+
+services:
+  service-a:
+    <<: *fips-common
+    container_name: fips-fw-container-a${FIPS_CI_NAME_SUFFIX:-}
+    hostname: host-a
+    volumes:
+      - ../docker/resolv.conf:/etc/resolv.conf:ro
+      - ./generated-configs${FIPS_CI_NAME_SUFFIX:-}/node-a/hosts:/etc/fips/hosts:ro
+      - ./generated-configs${FIPS_CI_NAME_SUFFIX:-}/node-a/fips.yaml:/etc/fips/fips.yaml:ro
+      - ./generated-configs${FIPS_CI_NAME_SUFFIX:-}/node-a/fips.key:/etc/fips/fips.key:ro
+    networks:
+      - fw-net
+
+  service-b:
+    <<: *fips-common
+    container_name: fips-fw-container-b${FIPS_CI_NAME_SUFFIX:-}
+    hostname: host-b
+    volumes:
+      - ../docker/resolv.conf:/etc/resolv.conf:ro
+      - ./generated-configs${FIPS_CI_NAME_SUFFIX:-}/node-b/hosts:/etc/fips/hosts:ro
+      - ./generated-configs${FIPS_CI_NAME_SUFFIX:-}/node-b/fips.yaml:/etc/fips/fips.yaml:ro
+      - ./generated-configs${FIPS_CI_NAME_SUFFIX:-}/node-b/fips.key:/etc/fips/fips.key:ro
+      - ../../packaging/common/fips.nft:/etc/fips/fips.nft:ro
+      - ./generated-configs${FIPS_CI_NAME_SUFFIX:-}/node-b/fips.d:/etc/fips/fips.d:ro
+    networks:
+      - fw-net

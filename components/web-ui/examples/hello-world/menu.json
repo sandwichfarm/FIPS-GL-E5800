@@ -1,0 +1,9 @@
+{
+  "index": 85,
+  "view": "hello-world",
+  "title": {
+    "translate": "hello-world.title"
+  },
+  "icon": "setting",
+  "level": 1
+}

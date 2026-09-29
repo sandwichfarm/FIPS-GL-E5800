@@ -1,0 +1,67 @@
+# Ethernet-only: 4-node ring, all Ethernet transport
+#
+# All links use raw Ethernet (AF_PACKET) over veth pairs. Nodes
+# discover each other via beacons (no static peer config). Tests
+# that Ethernet transport and beacon discovery work end-to-end.
+#
+# Topology:
+#
+#   n01 ---eth--- n02
+#    |             |
+#   eth           eth
+#    |             |
+#   n04 ---eth--- n03
+
+scenario:
+  name: "ethernet-only"
+  seed: 42
+  duration_secs: 30
+
+topology:
+  algorithm: explicit
+  num_nodes: 4
+  default_transport: ethernet
+  params:
+    adjacency:
+      - [n01, n02]
+      - [n02, n03]
+      - [n03, n04]
+      - [n04, n01]
+
+netem:
+  enabled: true
+  default_policy:
+    delay_ms: [1, 5]
+    jitter_ms: [0, 1]
+    loss_pct: [0, 0.5]
+
+link_flaps:
+  enabled: false
+
+traffic:
+  enabled: false
+
+# Baseline: the mesh came up, agreed on a root, and took parents. This
+# asserts nothing about what Ethernet transport does; it exists so that
+# a run in which the mesh never formed cannot report success, which
+# until now it could, because this scenario carried no assertions at
+# all.
+#
+# A 4-node mesh forms a spanning tree: one root and three nodes
+# with a parent. All six provably-completed archived runs show exactly
+# that, so these are the shape of a converged mesh rather than a
+# tolerance fitted to observations. This scenario covers the Ethernet
+# control plane only (beacon discovery, peering, the tree): traffic is
+# disabled above and no datagram is probed here. Data-plane delivery
+# over Ethernet (framing, AEAD over AF_PACKET) is asserted in
+# ethernet-mesh's delivery assertion, and the length field that trims
+# minimum-frame padding by unit tests on the receive loop's parse.
+assertions:
+  baseline:
+    min_nodes_reporting: 4
+    max_roots: 1
+    min_nodes_parented: 3
+
+logging:
+  rust_log: "info"
+  output_dir: "./sim-results"

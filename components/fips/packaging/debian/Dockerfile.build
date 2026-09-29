@@ -1,0 +1,72 @@
+# Build image for the Linux release artifacts.
+#
+# Pinned to the oldest distribution FIPS supports, because the glibc a binary is
+# linked against decides the glibc it will run on. See packaging/build-floor.env
+# for the floor and the reasoning; BASE is passed from there, not written here,
+# so there is one place to change it.
+#
+# This image carries the toolchain and the build dependencies only. It never
+# carries the source: the source is mounted at run time, so editing a file does
+# not invalidate the image and a warm rebuild costs seconds rather than minutes.
+#
+# A build from a git worktree carries no source revision: the worktree's .git is
+# a file pointing outside the mounted tree, so git cannot read it here. Release
+# and CI builds use full checkouts and carry one.
+ARG BASE=ubuntu:22.04
+FROM ${BASE}
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# dpkg-dev is not in a bare ubuntu:22.04 and is what provides dpkg-shlibdeps,
+# which cargo-deb's "$auto" dependency resolution shells out to. Without it the
+# declared dependencies would silently lose their versions again.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        pkg-config \
+        libdbus-1-dev \
+        libclang-dev \
+        clang \
+        binutils \
+        dpkg-dev \
+        git \
+        curl \
+        ca-certificates \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# build.rs asks git for the revision it embeds in the binaries. The source is
+# mounted at /src owned by the host user, while the build runs as root, and git
+# refuses a repository owned by someone else: without this entry the revision is
+# silently empty, exactly as it was when the image had no git at all.
+# The dirty flag can be stale in a local container build. build.rs reruns only
+# when .git/HEAD or .git/refs change, and the target directory is a persistent
+# volume, so an uncommitted edit alone does not refresh it; git here also runs
+# without the host user's global excludes, so a file only those ignore reads as
+# dirty. Release and CI builds start from a committed, fresh tree.
+RUN git config --system --add safe.directory /src
+
+# The toolchain version is passed in, read from rust-toolchain.toml by the
+# calling script, and the image tag carries it -- so the image cannot drift from
+# the compiler the rest of CI uses, and bumping the pin rebuilds the image. The
+# builder this replaces installed `stable` and never copied rust-toolchain.toml,
+# so it compiled with a different compiler from the release and nothing said so.
+#
+# CARGO_NET_RETRY raises cargo's own retry count for crate downloads, both for
+# cargo install below and for the package build that runs in this image; the
+# registry is fetched cold on every CI runner and has failed mid-download.
+# CARGO_HTTP_MULTIPLEXING is left at its default: turn it off only if HTTP/2
+# framing errors from the registry still occur with the higher retry count.
+ARG RUST_TOOLCHAIN
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    CARGO_NET_RETRY=10 \
+    PATH=/usr/local/cargo/bin:$PATH
+RUN test -n "${RUST_TOOLCHAIN}" \
+    && curl --retry 3 --retry-connrefused --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+      | sh -s -- -y --profile minimal --default-toolchain "${RUST_TOOLCHAIN}" \
+    && chmod -R a+w "$RUSTUP_HOME" "$CARGO_HOME"
+
+ARG CARGO_DEB_VERSION=3.6.3
+RUN cargo install cargo-deb --version "${CARGO_DEB_VERSION}" --locked \
+    && chmod -R a+w "$CARGO_HOME"
+
+WORKDIR /src

@@ -1,0 +1,14 @@
+[package]
+name = "ble-spike"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "ble_spike"
+path = "ble_spike.rs"
+
+[dependencies]
+bluer = { version = "0.17", features = ["bluetoothd", "l2cap"] }
+tokio = { version = "1", features = ["rt", "macros", "sync", "time"] }
+futures = "0.3"

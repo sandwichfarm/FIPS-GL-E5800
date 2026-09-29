@@ -1,0 +1,251 @@
+name: AUR Publish
+
+on:
+  push:
+    branches:
+      - master
+      - maint
+      - next
+    tags:
+      - 'v*'
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to publish (e.g. v0.4.0). Defaults to the tag the workflow was dispatched from.'
+        required: false
+        default: ''
+      pkgrel:
+        description: 'AUR pkgrel to publish. Use 2+ for packaging-only republishes of an existing tag.'
+        required: false
+        default: '1'
+
+jobs:
+  # ───────────────────────────────────────────────────────────────────────────
+  # Build + lint the AUR package on every trigger, matching the coverage the
+  # other package workflows (linux/macos/windows/openwrt) give their artifacts:
+  # branch pushes, pull requests, tags, and manual dispatch. Uses makepkg +
+  # namcap in an Arch container (neither tool exists on ubuntu-latest) and builds
+  # the *checked-out tree* from a local git-archive tarball, so it works for
+  # branch/PR builds and unreleased rc tags whose GitHub source archive does not
+  # exist yet. The lint fails the job on namcap error-level (E:) findings;
+  # warnings (W:) are advisory. This job never publishes.
+  # ───────────────────────────────────────────────────────────────────────────
+  aur-build:
+    name: Build and lint fips AUR package
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+
+    steps:
+      - name: Install build and lint tooling
+        run: |
+          set -euo pipefail
+          pacman -Sy --noconfirm --needed base-devel namcap git curl jq
+
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Test the publish gate
+        # Fixture tests for the script the publish job below waits with. They
+        # run here, on every trigger, so a change to the gate is exercised
+        # before a release tag depends on it.
+        run: bash packaging/aur/test-await-package-runs.sh
+
+      - name: Test the namcap gate
+        # Fixture tests, with canned namcap output, for the script the lint
+        # below runs namcap through.
+        run: bash packaging/aur/test-namcap-gate.sh
+
+      - name: Resolve package version
+        id: ver
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_PKGREL: ${{ inputs.pkgrel }}
+        run: |
+          set -euo pipefail
+          if [ -n "${INPUT_TAG:-}" ]; then
+            RAW="${INPUT_TAG#v}"
+          elif [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
+            RAW="${GITHUB_REF_NAME#v}"
+          else
+            # Branch push / PR: derive the version from the crate manifest.
+            RAW=$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
+          fi
+          # makepkg forbids '-' in pkgver; map e.g. 0.4.0-rc1 -> 0.4.0rc1,
+          # 0.4.0-dev -> 0.4.0dev. The build only needs an internally consistent
+          # pkgver (it matches the git-archive prefix below); this is not the
+          # value the real publish uses.
+          VERSION="${RAW//-/}"
+          PKGREL="${INPUT_PKGREL:-1}"
+          case "$PKGREL" in
+            ''|*[!0-9]*|0) echo "pkgrel '$PKGREL' must be a positive integer"; exit 1 ;;
+          esac
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "pkgrel=${PKGREL}" >> "$GITHUB_OUTPUT"
+          echo "Resolved AUR pkgver=${VERSION} pkgrel=${PKGREL}"
+
+      - name: Create non-root build user and fix ownership
+        run: |
+          set -euo pipefail
+          # makepkg refuses to run as root; create an unprivileged build user
+          # with passwordless sudo (needed for pacman dep installs during -s).
+          useradd -m -s /bin/bash builder
+          echo 'builder ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/builder
+          chmod 0440 /etc/sudoers.d/builder
+          # The checkout is owned by root; hand it to the build user.
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+
+      - name: Prove the namcap gate against real namcap
+        # Builds toy packages, one declared correctly and two missing a
+        # dependency, and checks the gate passes the first and fails the others
+        # with this run's namcap. Runs as the build user because makepkg
+        # refuses root and because that is how the lint below runs.
+        run: sudo -u builder bash packaging/aur/test-namcap-gate.sh --live
+
+      - name: Build a local source tarball of the checkout
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          # The PKGBUILD source= points at GitHub archive/<tag>.tar.gz, which does
+          # not exist for a branch push, a PR, or an unreleased rc tag and would
+          # 404. Instead build the checked-out tree by packing it into a local
+          # tarball whose top-level directory matches what the PKGBUILD expects
+          # ("fips-<pkgver>/"); patch-pkgbuild.sh repoints source= at it.
+          TARBALL="packaging/aur/fips-${VERSION}.tar.gz"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git -C "$GITHUB_WORKSPACE" archive --format=tar.gz \
+            --prefix="fips-${VERSION}/" -o "$TARBALL" HEAD
+          chown builder:builder "$TARBALL"
+          ls -l "$TARBALL"
+
+      - name: Patch PKGBUILD
+        env:
+          TAG: v${{ steps.ver.outputs.version }}
+          VERSION: ${{ steps.ver.outputs.version }}
+          PKGREL: ${{ steps.ver.outputs.pkgrel }}
+        run: |
+          set -euo pipefail
+          LOCAL_TARBALL="packaging/aur/fips-${VERSION}.tar.gz" \
+            bash packaging/aur/patch-pkgbuild.sh
+          chown builder:builder packaging/aur/PKGBUILD
+
+      - name: makepkg build and namcap lint (as build user)
+        run: |
+          set -euo pipefail
+          sudo -u builder bash -euo pipefail -c '
+            cd packaging/aur
+            echo "::group::namcap PKGBUILD"
+            bash namcap-gate.sh PKGBUILD
+            echo "::endgroup::"
+            echo "::group::makepkg build"
+            # No --nocheck. makepkg runs check() by default, so every AUR user
+            # runs it and this job must too. ci.yml runs the tests, but not this
+            # way: frozen and offline against what prepare fetched, with the
+            # Arch toolchain, in this container.
+            makepkg -s --noconfirm
+            echo "::endgroup::"
+            echo "::group::namcap built package"
+            bash namcap-gate.sh ./*.pkg.tar.*
+            echo "::endgroup::"
+          '
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Publish to the AUR. Runs only on a real (non-prerelease) release tag push,
+  # or a manual dispatch (packaging-only republish with explicit tag + pkgrel).
+  # Branch pushes and pull requests build+lint above but never reach this job.
+  # Gated on aur-build so a package that fails to build/lint is never published.
+  # It also waits for every package-*.yml run on the tag to succeed before it
+  # pushes: the AUR must not point at a tag whose release assets are still
+  # uploading or failed, and once it does, withdrawing the tag breaks the AUR
+  # package (its b2sum pins the tag's source archive).
+  # ───────────────────────────────────────────────────────────────────────────
+  aur-publish-fips:
+    name: Publish fips to AUR
+    needs: aur-build
+    runs-on: ubuntu-latest
+    # Above the gate's own 60-minute budget, so the gate reports a timeout
+    # rather than the runner killing it.
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      actions: read
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || (github.event_name == 'push'
+          && startsWith(github.ref, 'refs/tags/v')
+          && !contains(github.ref_name, '-'))
+
+    steps:
+      - name: Resolve release tag
+        id: tag
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_PKGREL: ${{ inputs.pkgrel }}
+        run: |
+          set -euo pipefail
+          TAG="${INPUT_TAG:-$GITHUB_REF_NAME}"
+          PKGREL="${INPUT_PKGREL:-1}"
+          case "$TAG" in
+            v*) ;;
+            *) echo "Tag '$TAG' does not look like a release tag (vX.Y.Z)"; exit 1 ;;
+          esac
+          case "$PKGREL" in
+            ''|*[!0-9]*|0) echo "pkgrel '$PKGREL' must be a positive integer"; exit 1 ;;
+          esac
+          case "$TAG" in
+            *-*)
+              if [ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ]; then
+                echo "Pre-release tag '$TAG' — skipping AUR publish"
+                exit 1
+              fi
+              ;;
+          esac
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          echo "pkgrel=${PKGREL}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
+
+      # The gate script comes from this workflow's own revision, not the tag:
+      # a dispatch republishing a tag cut before the gate existed would not
+      # find it in the tag's tree. The workflows it waits on still come from
+      # the tag's tree, which is what the tag push triggered.
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          path: gate-src
+          sparse-checkout: packaging/aur
+
+      - name: Wait for the tag's package workflows
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          SHA=$(git rev-parse 'HEAD^{commit}')
+          echo "Tag $TAG is at $SHA"
+          SHA="$SHA" WORKFLOW_DIR=.github/workflows \
+            bash gate-src/packaging/aur/await-package-runs.sh
+
+      - name: Patch PKGBUILD with pkgver, pkgrel, conflicts, and b2sums
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+          VERSION: ${{ steps.tag.outputs.version }}
+          PKGREL: ${{ steps.tag.outputs.pkgrel }}
+        run: bash packaging/aur/patch-pkgbuild.sh
+
+      - name: Publish to AUR
+        uses: KSXGitHub/github-actions-deploy-aur@abe8ac26b51011c88be58c8809fd2ac674068ea5 # v4.1.2
+        with:
+          pkgname: fips
+          pkgbuild: packaging/aur/PKGBUILD
+          updpkgsums: false
+          assets: |
+            packaging/aur/fips.sysusers
+            packaging/aur/fips.tmpfiles
+            packaging/aur/fips.install
+          commit_username: ${{ github.repository_owner }}
+          commit_email: ${{ secrets.AUR_EMAIL }}
+          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          commit_message: "Update to ${{ steps.tag.outputs.tag }}"

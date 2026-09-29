@@ -1,0 +1,32 @@
+#!/bin/sh
+# FIPS pre-removal script for Debian/Ubuntu
+set -e
+
+case "$1" in
+    remove|purge)
+        if [ -d /run/systemd/system ]; then
+            # The gateway requires the daemon, so it goes first.
+            systemctl stop fips-gateway.service 2>/dev/null || true
+            systemctl disable fips-gateway.service 2>/dev/null || true
+            systemctl stop fips-dns.service 2>/dev/null || true
+            systemctl disable fips-dns.service 2>/dev/null || true
+            systemctl stop fips.service 2>/dev/null || true
+            systemctl disable fips.service 2>/dev/null || true
+            systemctl stop fips-firewall.service 2>/dev/null || true
+            systemctl disable fips-firewall.service 2>/dev/null || true
+            systemctl daemon-reload
+        fi
+        ;;
+    upgrade)
+        # Stop services before upgrade; postinst will restart them
+        if [ -d /run/systemd/system ]; then
+            systemctl stop fips-gateway.service 2>/dev/null || true
+            systemctl stop fips-dns.service 2>/dev/null || true
+            systemctl stop fips.service 2>/dev/null || true
+        fi
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

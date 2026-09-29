@@ -1,0 +1,10 @@
+all:
+  children:
+    routers:
+      hosts:
+        e5800:
+          ansible_host: 192.168.8.1
+          ansible_user: root
+          ansible_connection: ssh
+          ansible_ssh_transfer_method: piped
+          ansible_remote_tmp: /tmp/.ansible-fips-stack

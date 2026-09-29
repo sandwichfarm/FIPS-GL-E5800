@@ -1,0 +1,59 @@
+- name: Restore reviewed packages after a stock firmware update
+  hosts: routers
+  gather_facts: false
+  serial: 1
+  vars_files:
+    - vars/defaults.yml
+  pre_tasks:
+    - name: Prevent a check-only fixture from authorizing installation
+      ansible.builtin.assert:
+        that: ansible_check_mode
+      when: check_only_fixture | default(false) | bool
+  roles:
+    - preflight
+  tasks:
+    - name: Require an explicit component selection
+      ansible.builtin.assert:
+        that:
+          - restore_components | length > 0
+          - restore_components | difference(['fips', 'web_ui', 'device_ui']) | length == 0
+        fail_msg: Select the packages to restore; no packages are enabled by default.
+
+    - name: Require the exact firmware tuple to have been reviewed
+      ansible.builtin.assert:
+        that:
+          - router_profile in approved_profiles
+        fail_msg: Unknown firmware/UI fingerprint. Capture and review this release before restoring packages.
+
+    # Validate ALL artifacts and prerequisites before ANY package can be installed.
+    - name: Validate selected packages locally
+      ansible.builtin.include_role:
+        name: package_validate
+      loop: "{{ restore_components }}"
+      loop_control:
+        loop_var: stack_component
+
+    - name: Check device dashboard runtime before installation
+      ansible.builtin.raw: python3 -c 'import PIL.Image; import numpy'
+      changed_when: false
+      check_mode: false
+      when: "'device_ui' in restore_components"
+
+    - name: Check all selected components before the first installation
+      ansible.builtin.include_role:
+        name: prerequisites
+
+    - name: Restore FIPS
+      ansible.builtin.include_role:
+        name: fips
+      when: "'fips' in restore_components"
+
+    - name: Restore web extension
+      ansible.builtin.include_role:
+        name: web_ui
+      when: "'web_ui' in restore_components"
+
+    - name: Restore device dashboard
+      ansible.builtin.include_role:
+        name: device_ui
+      when: "'device_ui' in restore_components"

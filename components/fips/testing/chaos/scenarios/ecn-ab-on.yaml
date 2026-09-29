@@ -1,0 +1,100 @@
+# ECN A/B Test: ECN ENABLED
+#
+# Identical to ecn-ab-off.yaml except ecn.enabled = true.
+# Run both scenarios and compare iperf3 throughput results.
+#
+# Design rationale:
+#   - Ingress policing at 1000 kbps: unlike HTB (which paces smoothly),
+#     the ingress policer *drops* excess inbound packets at the kernel
+#     level. This creates real packet loss visible to the FIPS UDP
+#     socket, triggering detect_congestion() via transport_drops.
+#   - 10 Mbps egress bandwidth: lets traffic flow freely outbound so
+#     that the ingress policer is the bottleneck. Multiple flows
+#     competing through bottleneck nodes generate excess traffic that
+#     the policer drops.
+#   - 10ms link delay: creates realistic RTT and causes TCP to batch
+#     packets into bursts, making ingress drops more likely.
+#   - 8KB recv_buf_size: small buffer amplifies the effect of bursty
+#     arrivals — dropped packets at ingress + buffer overflow trigger
+#     detect_congestion() via both MMP loss and transport_drops paths.
+#   - tcp_ecn=1 in entrypoint.sh: TCP negotiates ECN so CE marks
+#     reach TCP congestion control, enabling proactive backoff.
+#   - 4 concurrent sessions with 4 parallel streams: moderate load
+#     that creates real contention without overwhelming everything.
+#
+# With ECN enabled, transit nodes detect congestion early and set CE
+# flags, causing TCP to reduce its window proactively. Without ECN,
+# TCP only learns about congestion from packet drops (timeouts/triple
+# dup-ack), which is slower and causes more throughput loss.
+#
+#       n01 (root)
+#      /    \
+#    n02    n03
+#   /   \     \
+# n04   n05   n06
+
+scenario:
+  name: "ecn-ab-on"
+  seed: 42
+  duration_secs: 120
+
+topology:
+  algorithm: explicit
+  num_nodes: 6
+  params:
+    adjacency:
+      - [n01, n02]
+      - [n01, n03]
+      - [n02, n04]
+      - [n02, n05]
+      - [n03, n06]
+  subnet: "172.20.0.0/24"
+  ip_start: 10
+
+bandwidth:
+  enabled: true
+  tiers_mbps: [10]
+
+ingress:
+  enabled: true
+  tiers_kbps: [1000]
+  burst_bytes: 16000
+
+netem:
+  enabled: true
+  default_policy:
+    delay_ms: [10, 10]
+    jitter_ms: [0, 0]
+    loss_pct: [0, 0]
+  mutation:
+    interval_secs: {min: 9999, max: 9999}
+    fraction: 0.0
+    policies:
+      baseline:
+        delay_ms: [10, 10]
+        loss_pct: [0, 0]
+
+link_flaps:
+  enabled: false
+
+traffic:
+  enabled: true
+  max_concurrent: 4
+  interval_secs: {min: 3, max: 5}
+  duration_secs: {min: 20, max: 30}
+  parallel_streams: 4
+
+node_churn:
+  enabled: false
+
+logging:
+  rust_log: "info"
+  output_dir: "./sim-results/ecn-ab-on"
+
+fips_overrides:
+  node:
+    ecn:
+      enabled: true
+  transports:
+    udp:
+      recv_buf_size: 8192

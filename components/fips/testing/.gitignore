@@ -1,0 +1,18 @@
+# Staged binaries (copied from target/release/ for test runs)
+fips
+fipsctl
+fipstop
+fips-gateway
+
+# Generated test configs. The suffixed form is what a run with
+# FIPS_CI_NAME_SUFFIX set writes, so the glob has to cover both.
+generated-configs*/
+
+# Simulation results
+sim-results/
+
+# Python caches
+__pycache__/
+
+# Staged binary directory
+static/bin/

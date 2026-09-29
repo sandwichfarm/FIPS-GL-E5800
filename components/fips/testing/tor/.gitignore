@@ -1,0 +1,8 @@
+# Release binaries (copied at test time)
+**/fips
+**/fipsctl
+**/fipstop
+
+# Generated configs (created per-run from templates)
+*/configs/node-*.yaml
+!*/configs/node-*.yaml.tmpl

@@ -1,0 +1,25 @@
+- name: Require pinned artifact for component
+  ansible.builtin.assert:
+    that:
+      - stack_component in package_artifacts
+      - package_artifacts[stack_component].path is defined
+      - package_artifacts[stack_component].sha256 is defined
+
+- name: Validate digest, metadata and payload on controller
+  ansible.builtin.command:
+    argv:
+      - "{{ controller_python }}"
+      - "{{ playbook_dir }}/../tools/ipk.py"
+      - "{{ package_artifacts[stack_component].path }}"
+      - --sha256
+      - "{{ package_artifacts[stack_component].sha256 }}"
+      - --component
+      - "{{ stack_component }}"
+  delegate_to: localhost
+  check_mode: false
+  changed_when: false
+  register: inspected_package
+
+- name: Show reviewed package identity
+  ansible.builtin.debug:
+    msg: "{{ inspected_package.stdout | from_json }}"

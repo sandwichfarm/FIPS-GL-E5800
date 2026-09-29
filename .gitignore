@@ -1,0 +1,11 @@
+/private/
+/.cache/
+/artifacts/*
+!/artifacts/README.md
+**/__pycache__/
+*.pyc
+**/node_modules/
+**/target/
+.DS_Store
+/ansible/inventory/local.yml
+/ansible/vars/local.yml

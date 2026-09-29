@@ -1,0 +1,23 @@
+- name: Check FIPS kernel prerequisites
+  ansible.builtin.raw: |
+    set -eu
+    test -c /dev/net/tun
+    for pkg in kmod-tun kmod-br-netfilter kmod-nft-nat kmod-nf-conntrack ip-full; do
+      test "$(opkg status "$pkg" | awk '/^Status:/ {print $4}')" = installed
+    done
+  changed_when: false
+  check_mode: false
+  when: "'fips' in restore_components"
+
+- name: Check web extension paths
+  ansible.builtin.raw: test -d /usr/share/oui/menu.d && test -d /www/views
+  changed_when: false
+  check_mode: false
+  when: "'web_ui' in restore_components"
+
+- name: Check touchscreen interfaces
+  ansible.builtin.raw: |
+    test -c /dev/fb0 && test -c /dev/input/event0 && test -c /dev/input/event1
+  changed_when: false
+  check_mode: false
+  when: "'device_ui' in restore_components"

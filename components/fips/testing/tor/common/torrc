@@ -1,0 +1,21 @@
+# Tor configuration for FIPS socks5-outbound integration testing.
+# Provides a SOCKS5 proxy on port 9050 accessible from the Docker network.
+
+# Bind to all interfaces (Docker bridge network requires non-localhost)
+# IsolateSOCKSAuth is required because FIPS uses SOCKS5 username/password
+# for per-destination circuit isolation. Without it, Tor rejects auth method 0x02.
+SocksPort 0.0.0.0:9050 IsolateSOCKSAuth
+
+# Security hardening
+ExitRelay 0
+ExitPolicy reject *:*
+VanguardsLiteEnabled 1
+ConnectionPadding 1
+SafeLogging 1
+
+# Reduce startup time by not waiting for full circuit build
+# (we're testing SOCKS5 connectivity, not anonymity properties)
+__DisablePredictedCircuits 1
+
+# Logging
+Log notice stderr

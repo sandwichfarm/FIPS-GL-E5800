@@ -1,0 +1,51 @@
+networks:
+  fips-net:
+    name: ${FIPS_NETWORK:-fips-sidecar-net}
+    driver: bridge
+    # Reap label: this harness uses fixed -p sidecar-{a,b,c} project names
+    # (the test execs containers by those derived names), so its resources are
+    # NOT covered by ci-local's fipsci_ project prefix. Label them directly so
+    # ci-cleanup.sh can still reap them after a preemption/SIGKILL.
+    labels:
+      - "com.corganlabs.fips-ci=1"
+    ipam:
+      config:
+        - subnet: ${FIPS_SUBNET:-172.20.1.0/24}
+
+services:
+  fips:
+    image: ${FIPS_TEST_IMAGE:-fips-test:latest}
+    hostname: fips-sidecar
+    labels:
+      - "com.corganlabs.fips-ci=1"
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=0
+    restart: "no"
+    environment:
+      - RUST_LOG=${RUST_LOG:-info}
+      - FIPS_TEST_MODE=sidecar
+      - FIPS_NSEC=${FIPS_NSEC}
+      - FIPS_PEER_NPUB=${FIPS_PEER_NPUB:-}
+      - FIPS_PEER_ADDR=${FIPS_PEER_ADDR:-}
+      - FIPS_PEER_ALIAS=${FIPS_PEER_ALIAS:-peer}
+      - FIPS_UDP_BIND=${FIPS_UDP_BIND:-0.0.0.0:2121}
+      - FIPS_TUN_MTU=${FIPS_TUN_MTU:-1280}
+      - FIPS_PEER_TRANSPORT=${FIPS_PEER_TRANSPORT:-udp}
+    networks:
+      fips-net:
+        ipv4_address: ${FIPS_IPV4:-172.20.1.20}
+
+  app:
+    image: ${FIPS_TEST_APP_IMAGE:-fips-test-app:latest}
+    labels:
+      - "com.corganlabs.fips-ci=1"
+    network_mode: "service:fips"
+    depends_on:
+      - fips
+    volumes:
+      - ../docker/resolv.conf:/etc/resolv.conf:ro
+    command: ["sleep", "infinity"]

@@ -1,0 +1,17 @@
+{
+  "$schema": "../../schema/gl-plugin.schema.json",
+  "schemaVersion": 1,
+  "id": "hello-world",
+  "profile": "ui-only",
+  "compatibility": {
+    "minimumFirmware": "4.8.0",
+    "requiredComponents": ["gl-card", "gl-title"],
+    "requiredCapabilities": []
+  },
+  "package": {
+    "name": "gl-sdk4-ui-hello-world",
+    "architecture": "all",
+    "section": "base",
+    "depends": ["libc", "gl-sdk4-ui-core"]
+  }
+}

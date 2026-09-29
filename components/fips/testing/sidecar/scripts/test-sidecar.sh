@@ -1,0 +1,312 @@
+#!/bin/bash
+# Integration test for the FIPS sidecar deployment.
+#
+# Starts a 3-node chain (A—B—C) using standalone sidecar instances,
+# verifies link establishment, multi-hop connectivity, and network
+# isolation on each app container.
+#
+# Usage: ./test-sidecar.sh [--skip-build]
+#
+# Exit codes:
+#   0 — all tests passed
+#   1 — test failure
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SIDECAR_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+# shellcheck source=../../lib/wait-converge.sh
+source "$SCRIPT_DIR/../../lib/wait-converge.sh"
+
+# Deterministic keys derived from: derive-keys.py sidecar-test node-{a,b,c}
+NODE_A_NSEC="9e688d0879fa9cd025fea0487ac23495080e3de626070fdb9b78dc1f619dd453"
+NODE_A_NPUB="npub1jvren5hnege54lu3p2nzqacctmulqvkgp68yvfuj5jme5dtgnhxsdh6788"
+NODE_B_NSEC="3e4e10614c0490575fa5e994524ff3f4deaac2f20db189cc9c9a79da0d90f17a"
+NODE_B_NPUB="npub15h7z0ljzudqe9pgwx99cjsz2c0ennuyvkcc8zvtk3lg97xwzex9ska6g4y"
+NODE_C_NSEC="15148ed0131f7da43fd13e369dfedede14fb64698f3756636b569c3a3e87438f"
+NODE_C_NPUB="npub1zhezcykd0e34z4fxtranl45jaasgnlxv0kjqwlq2v56ggssn0w4qelcrvr"
+
+NETWORK_NAME="fips-sidecar-test${FIPS_CI_NAME_SUFFIX:-}"
+
+# Compose project names. These are explicit (they override COMPOSE_PROJECT_NAME),
+# so they carry the run suffix themselves — otherwise concurrent runs would share
+# one project and tear down each other's containers.
+PROJ_A="sidecar-a${FIPS_CI_NAME_SUFFIX:-}"
+PROJ_B="sidecar-b${FIPS_CI_NAME_SUFFIX:-}"
+PROJ_C="sidecar-c${FIPS_CI_NAME_SUFFIX:-}"
+# Network address range — claimed at startup by alloc_network below rather than
+# hardcoded, so two concurrent runs cannot request the same range.
+#
+# 10.40.0.0/16 is unclaimed in-tree: the suites use 172.20-172.32 and 172.99,
+# the chaos children 10.30.x, boringtun's inner network 10.99.x, and docker's
+# own default pool is 172.17-31 plus 192.168.
+NET_BASE="10.40"
+NET_CANDIDATES=64
+
+SUBNET=""
+GATEWAY_IP=""
+NODE_A_IP=""
+NODE_B_IP=""
+NODE_C_IP=""
+
+CONVERGE_TIMEOUT=30
+PASSED=0
+FAILED=0
+
+# Compose file paths
+COMPOSE_BASE="-f $SIDECAR_DIR/docker-compose.yml"
+COMPOSE_EXT="$COMPOSE_BASE -f $SIDECAR_DIR/docker-compose.external-net.yml"
+
+# ── Helpers ────────────────────────────────────────────────────────────────
+
+log()   { echo "=== $*"; }
+pass()  { echo "  PASS: $*"; PASSED=$((PASSED + 1)); }
+fail()  { echo "  FAIL: $*"; FAILED=$((FAILED + 1)); }
+
+# Claim a free /24 for this run's network.
+#
+# Claim-and-advance rather than deriving an offset from the run id: we attempt
+# creation on a candidate range and, if docker reports the range is taken, move
+# to the next. Docker's own address pool is then the arbiter, which makes an
+# overlap between two concurrent runs *impossible*. A hashed offset would only
+# make it unlikely, and an overlap is precisely the failure being avoided here.
+#
+# Deliberately does NOT discard stderr: only an address-pool conflict is worth
+# advancing on. Any other failure (name already taken, daemon error) is real,
+# and retrying it 64 times would bury the reason.
+alloc_network() {
+    local i err
+    for (( i = 0; i < NET_CANDIDATES; i++ )); do
+        SUBNET="${NET_BASE}.${i}.0/24"
+        if err=$(docker network create \
+                --subnet "$SUBNET" \
+                --label com.corganlabs.fips-ci=1 \
+                --label "com.corganlabs.fips-ci.run=${FIPS_CI_RUN_ID:-manual}" \
+                "$NETWORK_NAME" 2>&1); then
+            GATEWAY_IP="${NET_BASE}.${i}.1"
+            NODE_A_IP="${NET_BASE}.${i}.10"
+            NODE_B_IP="${NET_BASE}.${i}.11"
+            NODE_C_IP="${NET_BASE}.${i}.12"
+            log "Claimed network $NETWORK_NAME on $SUBNET"
+            return 0
+        fi
+        case "$err" in
+            *"Pool overlaps"*|*"pool overlaps"*) continue ;;
+            *) echo "  FAIL: docker network create: $err" >&2; return 1 ;;
+        esac
+    done
+    echo "  FAIL: no free /24 in ${NET_BASE}.0.0/16 after ${NET_CANDIDATES} attempts" >&2
+    return 1
+}
+
+cleanup() {
+    log "Cleaning up..."
+    # Tear down C and B first, then A. All three attach to the network as
+    # external, so none of them removes it — we do that last, by name.
+    docker compose $COMPOSE_EXT -p "$PROJ_C" down --volumes --remove-orphans 2>/dev/null || true
+    docker compose $COMPOSE_EXT -p "$PROJ_B" down --volumes --remove-orphans 2>/dev/null || true
+    docker compose $COMPOSE_EXT -p "$PROJ_A" down --volumes --remove-orphans 2>/dev/null || true
+    docker network rm "$NETWORK_NAME" >/dev/null 2>&1 || true
+}
+
+# Always clean up on exit
+trap cleanup EXIT
+
+# ── Build ──────────────────────────────────────────────────────────────────
+
+if [[ "${1:-}" != "--skip-build" ]]; then
+    log "Building test images..."
+    DOCKER_DIR="${FIPS_BUILD_CONTEXT:-$(cd "$SIDECAR_DIR/../docker" && pwd)}"
+    docker build -t fips-test:latest "$DOCKER_DIR"
+    docker build -t fips-test-app:latest -f "$DOCKER_DIR/Dockerfile.app" "$DOCKER_DIR"
+fi
+
+# ── Start nodes ────────────────────────────────────────────────────────────
+#
+# Chain topology: A — B — C
+#   node-a: no outbound peers (accepts inbound from B)
+#   node-b: peers with A (middle node, transit router)
+#   node-c: peers with B (end node)
+
+alloc_network || exit 1
+
+log "Starting node-a (no peers, joins the claimed network)..."
+# node-a is the root: explicitly clear FIPS_PEER_* so it does not inherit the
+# external peer default from .env (which points at a real public mesh node).
+# Without this, node-a auto-connects to the live mesh and the chain attaches
+# under an external root, inflating tree depth and breaking isolation.
+FIPS_NSEC="$NODE_A_NSEC" \
+FIPS_PEER_NPUB="" \
+FIPS_PEER_ADDR="" \
+FIPS_NETWORK="$NETWORK_NAME" \
+FIPS_SUBNET="$SUBNET" \
+FIPS_IPV4="$NODE_A_IP" \
+docker compose $COMPOSE_EXT -p "$PROJ_A" up -d
+
+log "Starting node-b (peers with node-a, joins external network)..."
+FIPS_NSEC="$NODE_B_NSEC" \
+FIPS_PEER_NPUB="$NODE_A_NPUB" \
+FIPS_PEER_ADDR="${NODE_A_IP}:2121" \
+FIPS_PEER_ALIAS="node-a" \
+FIPS_NETWORK="$NETWORK_NAME" \
+FIPS_SUBNET="$SUBNET" \
+FIPS_IPV4="$NODE_B_IP" \
+docker compose $COMPOSE_EXT -p "$PROJ_B" up -d
+
+log "Starting node-c (peers with node-b, joins external network)..."
+FIPS_NSEC="$NODE_C_NSEC" \
+FIPS_PEER_NPUB="$NODE_B_NPUB" \
+FIPS_PEER_ADDR="${NODE_B_IP}:2121" \
+FIPS_PEER_ALIAS="node-b" \
+FIPS_NETWORK="$NETWORK_NAME" \
+FIPS_SUBNET="$SUBNET" \
+FIPS_IPV4="$NODE_C_IP" \
+docker compose $COMPOSE_EXT -p "$PROJ_C" up -d
+
+# ── Wait for convergence ──────────────────────────────────────────────────
+
+log "Waiting for link establishment (up to ${CONVERGE_TIMEOUT}s)..."
+
+converged=false
+for i in $(seq 1 "$CONVERGE_TIMEOUT"); do
+    # node-b should have 2 links (A and C)
+    link_count=$(docker exec "${PROJ_B}-fips-1" fipsctl show links 2>/dev/null \
+        | grep -c '"state": "connected"' || true)
+    if [ "$link_count" -ge 2 ]; then
+        converged=true
+        break
+    fi
+    sleep 1
+done
+
+if [ "$converged" = true ]; then
+    log "Links established after ${i}s"
+else
+    log "TIMEOUT: links did not converge in ${CONVERGE_TIMEOUT}s"
+    log "node-a links:"
+    docker exec "${PROJ_A}-fips-1" fipsctl show links 2>&1 || true
+    log "node-b links:"
+    docker exec "${PROJ_B}-fips-1" fipsctl show links 2>&1 || true
+    log "node-c links:"
+    docker exec "${PROJ_C}-fips-1" fipsctl show links 2>&1 || true
+    exit 1
+fi
+
+# Wait for end-to-end multi-hop connectivity (the same app-to-app pings
+# the test asserts on) with a progress-aware deadline, instead of a
+# blind fixed sleep that can fire before coordinates propagate across the
+# chain. The directed pings below remain the actual assertions.
+_sidecar_converged() {
+    PASSED=0; FAILED=0
+    if docker exec "${PROJ_B}-app-1" ping6 -c1 -W2 "${NODE_A_NPUB}.fips" >/dev/null 2>&1; then PASSED=$((PASSED+1)); else FAILED=$((FAILED+1)); fi
+    if docker exec "${PROJ_C}-app-1" ping6 -c1 -W2 "${NODE_A_NPUB}.fips" >/dev/null 2>&1; then PASSED=$((PASSED+1)); else FAILED=$((FAILED+1)); fi
+    if docker exec "${PROJ_A}-app-1" ping6 -c1 -W2 "${NODE_C_NPUB}.fips" >/dev/null 2>&1; then PASSED=$((PASSED+1)); else FAILED=$((FAILED+1)); fi
+}
+wait_until_connected _sidecar_converged "$CONVERGE_TIMEOUT" 10 || true
+
+# ── Link verification ─────────────────────────────────────────────────────
+
+log "Verifying link counts..."
+
+a_links=$(docker exec "${PROJ_A}-fips-1" fipsctl show links 2>/dev/null \
+    | grep -c '"state": "connected"' || true)
+b_links=$(docker exec "${PROJ_B}-fips-1" fipsctl show links 2>/dev/null \
+    | grep -c '"state": "connected"' || true)
+c_links=$(docker exec "${PROJ_C}-fips-1" fipsctl show links 2>/dev/null \
+    | grep -c '"state": "connected"' || true)
+
+[ "$a_links" -ge 1 ] && pass "node-a has $a_links link(s)" || fail "node-a has $a_links links (expected >= 1)"
+[ "$b_links" -ge 2 ] && pass "node-b has $b_links link(s)" || fail "node-b has $b_links links (expected >= 2)"
+[ "$c_links" -ge 1 ] && pass "node-c has $c_links link(s)" || fail "node-c has $c_links links (expected >= 1)"
+
+# ── Direct connectivity (adjacent nodes) ──────────────────────────────────
+
+log "Testing direct connectivity (B app → A via fips0)..."
+
+if docker exec "${PROJ_B}-app-1" ping6 -c2 -W5 "${NODE_A_NPUB}.fips" >/dev/null 2>&1; then
+    pass "node-b app can ping node-a via fips0"
+else
+    fail "node-b app cannot ping node-a via fips0"
+fi
+
+# ── Multi-hop connectivity (C → A through B) ─────────────────────────────
+
+log "Testing multi-hop connectivity (C app → A via fips0, through B)..."
+
+if docker exec "${PROJ_C}-app-1" ping6 -c2 -W10 "${NODE_A_NPUB}.fips" >/dev/null 2>&1; then
+    pass "node-c app can ping node-a via fips0 (multi-hop through B)"
+else
+    fail "node-c app cannot ping node-a via fips0 (multi-hop through B)"
+fi
+
+# ── Reverse direction (A → C through B) ──────────────────────────────────
+
+log "Testing reverse multi-hop (A app → C via fips0, through B)..."
+
+if docker exec "${PROJ_A}-app-1" ping6 -c2 -W10 "${NODE_C_NPUB}.fips" >/dev/null 2>&1; then
+    pass "node-a app can ping node-c via fips0 (multi-hop through B)"
+else
+    fail "node-a app cannot ping node-c via fips0 (multi-hop through B)"
+fi
+
+# ── Network isolation verification ────────────────────────────────────────
+#
+# This is the critical security assertion: app containers must NOT be able
+# to reach anything outside the FIPS mesh.
+
+log "Verifying network isolation on app containers..."
+
+for node in a b c; do
+    container="sidecar-${node}${FIPS_CI_NAME_SUFFIX:-}-app-1"
+    # Fail loudly if the container is missing. Without this the two isolation
+    # assertions below pass vacuously: they assert a ping FAILS, and a ping into
+    # a non-existent container fails for the wrong reason. Only the loopback
+    # check, which expects success, would notice — so a naming slip here would
+    # silently turn the security assertions into no-ops.
+    docker inspect "$container" >/dev/null 2>&1 \
+        || { fail "$container does not exist — isolation assertions cannot be trusted"; continue; }
+    # Pick a peer IP that isn't this node's own address
+    case $node in
+        a) peer_ip="$NODE_B_IP" ;;
+        b) peer_ip="$NODE_C_IP" ;;
+        c) peer_ip="$NODE_A_IP" ;;
+    esac
+    log "  Checking $container..."
+
+    # IPv4 gateway should be unreachable (iptables DROP on eth0)
+    if docker exec "$container" ping -c1 -W2 "$GATEWAY_IP" >/dev/null 2>&1; then
+        fail "$container can reach IPv4 gateway (isolation broken!)"
+    else
+        pass "$container cannot reach IPv4 gateway (IPv4 blocked)"
+    fi
+
+    # IPv4 peer should be unreachable (iptables DROP on eth0)
+    if docker exec "$container" ping -c1 -W2 "$peer_ip" >/dev/null 2>&1; then
+        fail "$container can reach peer IPv4 (isolation broken!)"
+    else
+        pass "$container cannot reach peer IPv4 (IPv4 blocked)"
+    fi
+
+    # Loopback should work
+    if docker exec "$container" ping -c1 -W2 127.0.0.1 >/dev/null 2>&1; then
+        pass "$container can reach loopback (expected)"
+    else
+        fail "$container cannot reach loopback"
+    fi
+done
+
+# ── Summary ───────────────────────────────────────────────────────────────
+
+echo ""
+log "Results: $PASSED passed, $FAILED failed"
+
+if [ "$FAILED" -gt 0 ]; then
+    log "Dumping logs for failed run..."
+    for node in a b c; do
+        echo "--- sidecar-${node} logs ---"
+        docker logs "sidecar-${node}${FIPS_CI_NAME_SUFFIX:-}-fips-1" 2>&1 | tail -30
+        echo ""
+    done
+    exit 1
+fi
+
+log "All tests passed."

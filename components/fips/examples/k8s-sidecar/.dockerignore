@@ -1,0 +1,11 @@
+target/
+.git/
+.github/
+testing/chaos/
+testing/static/
+testing/sidecar/
+testing/tor/
+fips
+fipsctl
+../sidecar/fips
+../sidecar/fipsctl

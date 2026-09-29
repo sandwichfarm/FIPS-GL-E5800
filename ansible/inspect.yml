@@ -1,0 +1,7 @@
+- name: Inspect router without changing it
+  hosts: routers
+  gather_facts: false
+  vars_files:
+    - vars/defaults.yml
+  roles:
+    - preflight

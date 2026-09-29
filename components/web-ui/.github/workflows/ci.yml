@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            node: 18
+          - os: ubuntu-latest
+            node: 20
+          - os: ubuntu-latest
+            node: 22
+          - os: macos-latest
+            node: 22
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm pack --dry-run
+
+  firmware-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.catalog.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - id: catalog
+        run: echo "matrix=$(node scripts/firmware-matrix.js)" >> "$GITHUB_OUTPUT"
+
+  firmware-contract:
+    name: Firmware contract (${{ matrix.id }})
+    needs: firmware-matrix
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.firmware-matrix.outputs.matrix) }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - uses: actions/cache@v5
+        with:
+          path: .cache/firmware
+          key: gl-firmware-${{ matrix.id }}-${{ matrix.sha256 }}
+      - run: sudo apt-get update
+      - run: sudo apt-get install --yes squashfs-tools
+      - run: node scripts/verify-firmware.js "${{ matrix.id }}" --download

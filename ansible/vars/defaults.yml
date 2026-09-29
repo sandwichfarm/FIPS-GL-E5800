@@ -1,0 +1,5 @@
+restore_components: []
+# Explicitly reviewed firmware tuples. See docs/recovery.md before populating.
+approved_profiles: []
+package_artifacts: {}
+controller_python: python3

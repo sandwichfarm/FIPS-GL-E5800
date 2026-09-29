@@ -1,0 +1,232 @@
+#!/bin/sh /etc/rc.common
+# FIPS outbound LAN gateway — procd init script for OpenWrt
+#
+# Not enabled by default. Enable with:
+#   service fips-gateway enable
+#   service fips-gateway start
+#
+# Requires: fips daemon running, gateway section in /etc/fips/fips.yaml,
+# IPv6 forwarding enabled.
+
+USE_PROCD=1
+START=96
+STOP=09
+
+PROG=/usr/bin/fips-gateway
+CONFIG=/etc/fips/fips.yaml
+
+# Port the gateway DNS listens on when gateway.dns.listen is not set. Must
+# match DEFAULT_DNS_LISTEN in the gateway's source; the scenario harness checks
+# the two agree. The port actually used comes from gateway_dns_port.
+GW_DNS_DEFAULT=5365
+# Port the FIPS daemon DNS listens on.
+DAEMON_DNS_PORT=5354
+
+# Global-scope IPv6 prefix assigned to br-lan so Android/Chrome clients
+# believe they have full IPv6 and actually send AAAA queries.
+# Uses RFC 5180 (benchmarking) range — not routed on the public internet.
+GLOBAL_PREFIX="2001:2:f1b5::1/64"
+
+start_service() {
+	# The gateway daemon exits when gateway.enabled is not true, so without
+	# this check starting a disabled gateway would still take dnsmasq's .fips
+	# upstream away from the daemon and point it at a port nothing listens on.
+	if [ "$(gateway_config_enabled)" != "true" ]; then
+		logger -t fips-gateway "gateway.enabled is not true in $CONFIG; not starting"
+		return 1
+	fi
+
+	# Apply gateway sysctls (proxy_ndp, IPv6 forwarding).
+	sysctl -p /etc/sysctl.d/fips-gateway.conf 2>/dev/null || true
+
+	# Load conntrack module for /proc/net/nf_conntrack.
+	modprobe nf_conntrack 2>/dev/null || true
+
+	# Redirect dnsmasq .fips forwarding from the daemon (5354) to the port the
+	# gateway listens on, so LAN clients get virtual IPs instead of raw mesh
+	# addresses. Done early and synchronously so dnsmasq is ready before the
+	# gateway starts accepting DNS queries.
+	dnsmasq_swap_fips_upstream "$(gateway_dns_port)"
+	sleep 1
+
+	# Add a global-scope IPv6 prefix to br-lan so Android/Chrome clients
+	# send AAAA queries (they suppress AAAA when only ULA addresses exist).
+	# Also set ra_default=2 so odhcpd advertises a default route even
+	# without upstream IPv6 — needed for clients to accept the prefix.
+	gateway_add_global_prefix
+
+	# Advertise the virtual IP pool via Router Advertisement so LAN clients
+	# learn a route to the pool automatically.
+	gateway_add_ra_route
+
+	procd_open_instance
+	procd_set_param command "$PROG" --config "$CONFIG"
+	procd_set_param respawn 3600 5 5
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	procd_close_instance
+}
+
+stop_service() {
+	# Restore dnsmasq .fips forwarding back to the daemon.
+	dnsmasq_swap_fips_upstream "$DAEMON_DNS_PORT"
+
+	# Remove the RA route for the virtual IP pool.
+	gateway_remove_ra_route
+
+	# Remove the global prefix and ra_default override.
+	gateway_remove_global_prefix
+}
+
+reload_service() {
+	restart
+}
+
+# Extract the gateway "enabled" flag from fips.yaml.
+# Prints the value indented under the top-level "gateway:" block, or nothing
+# when there is no such block.
+gateway_config_enabled() {
+	awk '/^gateway:/{found=1; next} found && /^[^ ]/{found=0} found && /enabled:/{gsub(/.*enabled:[[:space:]]*/, ""); gsub(/["'"'"']/, ""); print; exit}' "$CONFIG"
+}
+
+# Print the port the gateway's DNS listener will bind: the digits after the
+# last ":" of the "listen:" value inside the top-level "gateway:" block of
+# fips.yaml, or $GW_DNS_DEFAULT when there is no such line or its value does
+# not end in a port. Commented lines are skipped, and "listen_port:" (a port
+# forward key) does not match.
+#
+# Block-style YAML only: a flow-style "dns: {listen: ...}" reads as the
+# default. The dnsmasq entry this port feeds is always ::1#<port>, so a
+# gateway listening only on 127.0.0.1 is still not reachable through it.
+gateway_dns_port() {
+	local port
+	port="$(awk '
+		/^[A-Za-z_]/ { top = $1 }
+		top != "gateway:" { next }
+		/^[[:space:]]*#/ { next }
+		/^[[:space:]]+listen:/ {
+			v = $0
+			sub(/^[[:space:]]+listen:[[:space:]]*/, "", v)
+			sub(/[[:space:]]+#.*$/, "", v)
+			gsub(/["'"'"']/, "", v)
+			sub(/[[:space:]]+$/, "", v)
+			n = split(v, part, ":")
+			if (n > 1 && part[n] ~ /^[0-9]+$/) print part[n]
+			exit
+		}
+	' "$CONFIG" 2>/dev/null)"
+	echo "${port:-$GW_DNS_DEFAULT}"
+}
+
+# Extract the gateway pool CIDR from fips.yaml.
+# Looks for "pool:" indented under the top-level "gateway:" block.
+gateway_pool_cidr() {
+	awk '/^gateway:/{found=1; next} found && /^[^ ]/{found=0} found && /pool:/{gsub(/.*pool:[[:space:]]*/, ""); gsub(/["'"'"']/, ""); print; exit}' "$CONFIG"
+}
+
+# Add an RA-advertised route for the virtual IP pool so LAN clients
+# automatically learn how to reach virtual IPs.
+gateway_add_ra_route() {
+	local pool
+	pool="$(gateway_pool_cidr)"
+	[ -z "$pool" ] && return 0
+
+	# Add a kernel route on br-lan (needed for RA to advertise it).
+	ip -6 route replace "$pool" dev br-lan proto static 2>/dev/null || true
+
+	# Add a UCI route6 entry for odhcpd to include in Router Advertisements.
+	# Remove any stale entry first.
+	gateway_remove_ra_route_uci
+	uci add dhcp route6 >/dev/null
+	uci set dhcp.@route6[-1].interface='lan'
+	uci set dhcp.@route6[-1].target="$pool"
+	uci commit dhcp
+	/etc/init.d/odhcpd restart 2>/dev/null || true
+}
+
+# Remove the RA route.
+gateway_remove_ra_route() {
+	local pool
+	pool="$(gateway_pool_cidr)"
+	[ -z "$pool" ] && return 0
+
+	ip -6 route del "$pool" dev br-lan proto static 2>/dev/null || true
+	gateway_remove_ra_route_uci
+	/etc/init.d/odhcpd restart 2>/dev/null || true
+}
+
+# Remove any existing UCI route6 entries for the pool.
+gateway_remove_ra_route_uci() {
+	local i=0
+	while uci -q get "dhcp.@route6[$i]" >/dev/null 2>&1; do
+		if [ "$(uci -q get "dhcp.@route6[$i].target")" = "$(gateway_pool_cidr)" ]; then
+			uci delete "dhcp.@route6[$i]"
+			uci commit dhcp
+			return 0
+		fi
+		i=$((i + 1))
+	done
+}
+
+# Add a global-scope IPv6 prefix to br-lan and enable RA default route.
+gateway_add_global_prefix() {
+	# Add the global prefix via UCI (idempotent — remove first).
+	local current
+	current="$(uci -q get network.lan.ip6addr 2>/dev/null || echo "")"
+	if [ "$current" != "$GLOBAL_PREFIX" ]; then
+		uci set network.lan.ip6addr="$GLOBAL_PREFIX"
+		uci commit network
+	fi
+
+	# Force odhcpd to advertise a default route even without upstream IPv6.
+	local ra_default
+	ra_default="$(uci -q get dhcp.lan.ra_default 2>/dev/null || echo "")"
+	if [ "$ra_default" != "2" ]; then
+		uci set dhcp.lan.ra_default='2'
+		uci commit dhcp
+	fi
+
+	# Apply network change immediately (odhcpd restarted by gateway_add_ra_route).
+	/etc/init.d/network reload 2>/dev/null || true
+}
+
+# Remove the global prefix and ra_default override.
+gateway_remove_global_prefix() {
+	local current
+	current="$(uci -q get network.lan.ip6addr 2>/dev/null || echo "")"
+	if [ "$current" = "$GLOBAL_PREFIX" ]; then
+		uci delete network.lan.ip6addr
+		uci commit network
+		/etc/init.d/network reload 2>/dev/null || true
+	fi
+
+	uci -q delete dhcp.lan.ra_default 2>/dev/null || true
+	uci commit dhcp
+	/etc/init.d/odhcpd restart 2>/dev/null || true
+}
+
+# Swap the dnsmasq .fips forwarding port via UCI and restart dnsmasq.
+# $1 = target port number
+dnsmasq_swap_fips_upstream() {
+	local port="$1"
+	local server
+
+	# Remove every loopback .fips forward, then add the one for $port. That
+	# covers the daemon's port, this gateway's, and a stale entry for any other
+	# local port, such as the old default 5353 or a changed gateway.dns.listen.
+	# A .fips forward to another host and servers for other domains are kept.
+	# uci prints a list on one line separated by spaces.
+	for server in $(uci -q get 'dhcp.@dnsmasq[0].server' 2>/dev/null); do
+		case "$server" in
+		"/fips/::1#"* | "/fips/127.0.0.1#"*)
+			uci -q del_list dhcp.@dnsmasq[0].server="$server" 2>/dev/null
+			;;
+		esac
+	done
+
+	uci add_list dhcp.@dnsmasq[0].server="/fips/::1#${port}"
+	uci commit dhcp
+
+	# Restart dnsmasq to pick up the change.
+	/etc/init.d/dnsmasq restart 2>/dev/null || true
+}

@@ -1,0 +1,705 @@
+{
+  "tested_at": "2026-04-11T19:43:05.222Z",
+  "firmware": "4.8.1",
+  "methods": {
+    "system.get_status": {
+      "status": "ok",
+      "size": 1822,
+      "keys": [
+        "network",
+        "wifi",
+        "service",
+        "client",
+        "system"
+      ]
+    },
+    "system.get_info": {
+      "status": "ok",
+      "size": 1118,
+      "keys": [
+        "hardware_version",
+        "vendor",
+        "firmware_type",
+        "mac",
+        "sn",
+        "hidden_features",
+        "hardware_feature",
+        "country_code",
+        "software_feature",
+        "cpu_num",
+        "board_info",
+        "firmware_date",
+        "model",
+        "ddns",
+        "sn_bak",
+        "firmware_version",
+        "device_type"
+      ]
+    },
+    "system.get_load": {
+      "status": "ok",
+      "size": 112,
+      "keys": [
+        "memory_free",
+        "memory_buff_cache",
+        "memory_total",
+        "load_average"
+      ]
+    },
+    "system.get_timezone_config": {
+      "status": "ok",
+      "size": 161,
+      "keys": [
+        "zonename",
+        "tzoffset",
+        "autotimezone_enabled",
+        "localtime",
+        "timestamp",
+        "timezone"
+      ]
+    },
+    "system.get_usb3_disable": {
+      "status": "ok",
+      "size": 22,
+      "keys": [
+        "usb3_disable"
+      ]
+    },
+    "vpn-client.get_status": {
+      "status": "ok",
+      "size": 306,
+      "keys": [
+        "status_list",
+        "mode"
+      ]
+    },
+    "vpn-client.get_all_config_list": {
+      "status": "ok",
+      "size": 1340,
+      "keys": [
+        "configs"
+      ]
+    },
+    "vpn-client.get_tunnel": {
+      "status": "ok",
+      "size": 678,
+      "keys": [
+        "default_tunnels",
+        "tunnels",
+        "global_enabled"
+      ]
+    },
+    "vpn-client.get_connection_methods": {
+      "status": "ok",
+      "size": 44,
+      "keys": [
+        "connection_methods"
+      ]
+    },
+    "wg-client.get_group_list": {
+      "status": "ok",
+      "size": 1085,
+      "keys": [
+        "groups"
+      ]
+    },
+    "wg-server.get_config": {
+      "status": "ok",
+      "size": 154,
+      "keys": [
+        "port",
+        "address_v6",
+        "initialization",
+        "private_key",
+        "public_key",
+        "local_access",
+        "address_v4"
+      ]
+    },
+    "wg-server.get_setting": {
+      "status": "ok",
+      "size": 59,
+      "keys": [
+        "client_to_client",
+        "masq",
+        "local_access"
+      ]
+    },
+    "wg-server.get_peer_list": {
+      "status": "ok",
+      "size": 12,
+      "keys": [
+        "peers"
+      ]
+    },
+    "ovpn-client.get_group_list": {
+      "status": "ok",
+      "size": 341,
+      "keys": [
+        "groups"
+      ]
+    },
+    "ovpn-server.get_config": {
+      "status": "ok",
+      "size": 397,
+      "keys": [
+        "dh",
+        "lzo",
+        "port",
+        "end",
+        "subnetv6",
+        "mode",
+        "local_access",
+        "proto",
+        "tap_address",
+        "subnetv4",
+        "tap_mask",
+        "access_scope",
+        "cipher",
+        "initialization",
+        "client_auth",
+        "mask",
+        "verb",
+        "start",
+        "hmac",
+        "client_to_client",
+        "auth"
+      ]
+    },
+    "ovpn-server.get_setting": {
+      "status": "ok",
+      "size": 34,
+      "keys": [
+        "local_access",
+        "masq"
+      ]
+    },
+    "ovpn-server.get_user_list": {
+      "status": "ok",
+      "size": 16,
+      "keys": [
+        "user_list"
+      ]
+    },
+    "clients.get_status": {
+      "status": "ok",
+      "size": 36,
+      "keys": [
+        "wireless_total",
+        "cable_total"
+      ]
+    },
+    "clients.get_list": {
+      "status": "ok",
+      "size": 86677,
+      "keys": [
+        "clients"
+      ]
+    },
+    "wifi.get_status": {
+      "status": "ok",
+      "size": 94,
+      "keys": [
+        "res"
+      ]
+    },
+    "wifi.get_config": {
+      "status": "ok",
+      "size": 2463,
+      "keys": [
+        "res",
+        "dfs_support"
+      ]
+    },
+    "firewall.get_port_forward_list": {
+      "status": "ok",
+      "size": 10,
+      "keys": [
+        "res"
+      ]
+    },
+    "firewall.get_rule_list": {
+      "status": "ok",
+      "size": 10,
+      "keys": [
+        "res"
+      ]
+    },
+    "firewall.get_zone_list": {
+      "status": "ok",
+      "size": 93,
+      "keys": [
+        "internals",
+        "externals"
+      ]
+    },
+    "firewall.get_dmz": {
+      "status": "ok",
+      "size": 17,
+      "keys": [
+        "enabled"
+      ]
+    },
+    "firewall.get_wan_access": {
+      "status": "ok",
+      "size": 101,
+      "keys": [
+        "enable_https",
+        "enable_ping",
+        "enable_ssh",
+        "whitelist",
+        "enable_whitelist"
+      ]
+    },
+    "network.get_advance_config": {
+      "status": "ok",
+      "size": 31,
+      "keys": [
+        "nat_enable",
+        "sip_enable"
+      ]
+    },
+    "network.get_netnat_config": {
+      "status": "ok",
+      "size": 81,
+      "keys": [
+        "list",
+        "enable",
+        "qos_enabled",
+        "actype",
+        "wifi_reload"
+      ]
+    },
+    "network.get_arp_list": {
+      "status": "ok",
+      "size": 386,
+      "keys": [
+        "entries"
+      ]
+    },
+    "lan.get_config_list": {
+      "status": "ok",
+      "size": 413,
+      "keys": [
+        "interfaces"
+      ]
+    },
+    "lan.get_static_bind_list": {
+      "status": "ok",
+      "size": 23,
+      "keys": [
+        "static_bind_list"
+      ]
+    },
+    "lan.get_wan_info": {
+      "status": "ok",
+      "size": 157,
+      "keys": [
+        "wan_info"
+      ]
+    },
+    "dns.get_config": {
+      "status": "ok",
+      "size": 191,
+      "keys": [
+        "force_dns",
+        "controld_id",
+        "override_vpn",
+        "dot_provider",
+        "nextdns_id",
+        "rebind_protection",
+        "mode",
+        "free_controld_id",
+        "server"
+      ]
+    },
+    "dns.get_info": {
+      "status": "ok",
+      "size": 60345,
+      "keys": [
+        "protos",
+        "serverlist",
+        "dnscrypt_version"
+      ]
+    },
+    "repeater.get_status": {
+      "status": "ok",
+      "size": 28,
+      "keys": [
+        "state_s",
+        "state"
+      ]
+    },
+    "repeater.get_config": {
+      "status": "ok",
+      "size": 59,
+      "keys": [
+        "macaddr",
+        "auto",
+        "dfs_support"
+      ]
+    },
+    "repeater.get_saved_ap_list": {
+      "status": "ok",
+      "size": 4744,
+      "keys": [
+        "res"
+      ]
+    },
+    "logread.get_module_name": {
+      "status": "ok",
+      "size": 71,
+      "keys": [
+        "modules"
+      ]
+    },
+    "tailscale.get_status": {
+      "status": "ok",
+      "size": 34,
+      "keys": [
+        "dns"
+      ]
+    },
+    "tailscale.get_config": {
+      "status": "ok",
+      "size": 84,
+      "keys": [
+        "wan_enabled",
+        "lan_ip",
+        "enabled",
+        "lan_enabled"
+      ]
+    },
+    "tailscale.get_exit_node_list": {
+      "status": "ok",
+      "size": 2,
+      "keys": []
+    },
+    "adguardhome.get_config": {
+      "status": "ok",
+      "size": 37,
+      "keys": [
+        "enabled",
+        "dns_enabled"
+      ]
+    },
+    "ddns.get_status": {
+      "status": "ok",
+      "size": 91,
+      "keys": [
+        "ips",
+        "status"
+      ]
+    },
+    "ddns.get_config": {
+      "status": "ok",
+      "size": 43,
+      "keys": [
+        "device_id",
+        "enable_ddns"
+      ]
+    },
+    "plugins.get_config": {
+      "status": "ok",
+      "size": 407,
+      "keys": [
+        "source"
+      ]
+    },
+    "plugins.get_repository_status": {
+      "status": "ok",
+      "size": 173,
+      "keys": [
+        "time_current",
+        "count_reserve",
+        "count_updatable",
+        "count_installed",
+        "time_last_update",
+        "count_all",
+        "status",
+        "count_not_installed"
+      ]
+    },
+    "timer.get_led": {
+      "status": "ok",
+      "size": 114,
+      "keys": [
+        "turnon_hour",
+        "turnoff_min",
+        "turnon_min",
+        "enable",
+        "week",
+        "turnoff_hour"
+      ]
+    },
+    "timer.get_reboot": {
+      "status": "ok",
+      "size": 62,
+      "keys": [
+        "enable",
+        "week",
+        "hour",
+        "min"
+      ]
+    },
+    "timer.get_wifi": {
+      "status": "ok",
+      "size": 1104,
+      "keys": [
+        "wifi",
+        "wifi_func_2g",
+        "wifi_func_5g"
+      ]
+    },
+    "timer.get_screen": {
+      "status": "ok",
+      "size": 115,
+      "keys": [
+        "turnon_hour",
+        "turnoff_min",
+        "turnon_min",
+        "enable",
+        "week",
+        "turnoff_hour"
+      ]
+    },
+    "cable.get_config": {
+      "status": "ok",
+      "size": 19,
+      "keys": [
+        "protocol"
+      ]
+    },
+    "cable.get_ports_config": {
+      "status": "ok",
+      "size": 206,
+      "keys": [
+        "ports"
+      ]
+    },
+    "cable.get_ports_status": {
+      "status": "ok",
+      "size": 70,
+      "keys": [
+        "ports"
+      ]
+    },
+    "led.get_config": {
+      "status": "ok",
+      "size": 19,
+      "keys": [
+        "led_enable"
+      ]
+    },
+    "fan.get_status": {
+      "status": "ok",
+      "size": 26,
+      "keys": [
+        "speed",
+        "status"
+      ]
+    },
+    "fan.get_config": {
+      "status": "ok",
+      "size": 40,
+      "keys": [
+        "warn_temperature",
+        "temperature"
+      ]
+    },
+    "netmode.get_mode": {
+      "status": "ok",
+      "size": 17,
+      "keys": [
+        "mode"
+      ]
+    },
+    "parental-control.get_config": {
+      "status": "ok",
+      "size": 297,
+      "keys": [
+        "enable_app",
+        "groups",
+        "enable",
+        "drop_anonymous",
+        "rules",
+        "auto_update"
+      ]
+    },
+    "parental-control.get_status": {
+      "status": "ok",
+      "size": 31,
+      "keys": [
+        "groups",
+        "time_valid"
+      ]
+    },
+    "parental-control.get_app_list": {
+      "status": "ok",
+      "size": 7141,
+      "keys": [
+        "apps"
+      ]
+    },
+    "black_white_list.get_config": {
+      "status": "ok",
+      "size": 16,
+      "keys": [
+        "mode"
+      ]
+    },
+    "switch-button.get_config": {
+      "status": "ok",
+      "size": 30,
+      "keys": [
+        "func",
+        "sub_func"
+      ]
+    },
+    "switch-button.get_funcs": {
+      "status": "ok",
+      "size": 198,
+      "keys": [
+        "funcs"
+      ]
+    },
+    "local-access.get_config": {
+      "status": "ok",
+      "size": 184,
+      "keys": [
+        "session_timeout",
+        "ssh_port",
+        "https_port",
+        "luci_redirect_https",
+        "luci_http_port",
+        "luci_https_port",
+        "redirect_https",
+        "ssh_enabled",
+        "http_port"
+      ]
+    },
+    "luci.get_status": {
+      "status": "ok",
+      "size": 12,
+      "keys": [
+        "status"
+      ]
+    },
+    "tethering.get_config": {
+      "status": "ok",
+      "size": 2,
+      "keys": []
+    },
+    "tethering.get_status": {
+      "status": "ok",
+      "size": 25,
+      "keys": [
+        "status",
+        "devices"
+      ]
+    },
+    "kmwan.get_config": {
+      "status": "ok",
+      "size": 1208,
+      "keys": [
+        "interfaces",
+        "mode"
+      ]
+    },
+    "kmwan.get_status": {
+      "status": "ok",
+      "size": 223,
+      "keys": [
+        "interfaces"
+      ]
+    },
+    "edgerouter.get_config": {
+      "status": "ok",
+      "size": 30,
+      "keys": [
+        "enable",
+        "ignore"
+      ]
+    },
+    "edgerouter.get_status": {
+      "status": "ok",
+      "size": 135,
+      "keys": [
+        "detected",
+        "dns",
+        "gateway",
+        "valid",
+        "netmask",
+        "ip"
+      ]
+    },
+    "ipv6.get_ipv6": {
+      "status": "ok",
+      "size": 54,
+      "keys": [
+        "enable",
+        "lan_dns_mode",
+        "lan_mode"
+      ]
+    },
+    "igmp.get_config": {
+      "status": "ok",
+      "size": 28,
+      "keys": [
+        "enable",
+        "version"
+      ]
+    },
+    "ui.get_menu_list": {
+      "status": "ok",
+      "size": 5853,
+      "keys": [
+        "menus"
+      ]
+    },
+    "tor.get_status": {
+      "status": "ok",
+      "size": 2,
+      "keys": []
+    },
+    "tor.get_config": {
+      "status": "ok",
+      "size": 46,
+      "keys": [
+        "enable",
+        "countries",
+        "manual"
+      ]
+    },
+    "upgrade.get_config": {
+      "status": "ok",
+      "size": 34,
+      "keys": [
+        "rc_upgrade",
+        "prompt"
+      ]
+    },
+    "cloud.get_config": {
+      "status": "ok",
+      "size": 205,
+      "keys": [
+        "rtty_web",
+        "token_invalid",
+        "cloud_enable",
+        "aw_api_url",
+        "rtty_ssh",
+        "serverzones",
+        "aw_url"
+      ]
+    }
+  },
+  "feature_gated": {
+    "logread.get_config": "Method not found — may not exist on all firmware versions",
+    "modem.get_apn_poll_enabled": "Method not found — requires cellular modem hardware",
+    "bark.get_config": "Method not found — requires Bark parental control package",
+    "bark.get_status": "Method not found — requires Bark parental control package",
+    "mvas.get_connect_info": "Method not found — requires multi-SIM hardware",
+    "plugins.get_package_info": "Requires {name: \"package-name\"} parameter, returns Internal error with {}",
+    "mptun.get_token": "Timeout — requires AstroWarp cloud setup"
+  }
+}

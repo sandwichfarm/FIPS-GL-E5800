@@ -1,0 +1,156 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 560" font-family="monospace" font-size="12">
+  <style>
+    rect.outer   { fill: #151525; stroke: #505070; stroke-width: 2; rx: 6; }
+    rect.layer   { rx: 4; }
+    rect.api     { fill: #1a3a2a; stroke: #40a060; stroke-width: 1.5; }
+    rect.tun     { fill: #1a2a3a; stroke: #4080c0; stroke-width: 1.5; }
+    rect.fsp     { fill: #2a2040; stroke: #8060c0; stroke-width: 1.5; }
+    rect.fmp     { fill: #2e3a5e; stroke: #5080c0; stroke-width: 1.5; }
+    rect.xport   { fill: #2a1a1a; stroke: #c06040; stroke-width: 1.5; }
+    rect.cat     { fill: none; stroke: #404060; stroke-width: 1; stroke-dasharray: 4,3; rx: 3; }
+    text         { fill: #e0e0e0; }
+    text.label   { font-size: 13px; font-weight: bold; }
+    text.sub     { font-size: 10px; fill: #909090; }
+    text.cat     { font-size: 9px; fill: #707090; font-style: italic; }
+    text.title   { font-size: 16px; font-weight: bold; }
+    text.subtitle{ font-size: 12px; fill: #909090; }
+    line.conn    { stroke: #606080; stroke-width: 1.5; }
+    line.peer    { stroke: #505060; stroke-width: 1; stroke-dasharray: 3,3; }
+  </style>
+
+  <!-- Background -->
+  <rect width="800" height="560" fill="#0d1117" rx="8"/>
+
+  <!-- Title -->
+  <text x="400" y="28" text-anchor="middle" class="title">FIPS Node Architecture</text>
+  <text x="400" y="46" text-anchor="middle" class="subtitle">Application interfaces, protocol layers, and transport abstraction</text>
+
+  <!-- Outer node box -->
+  <rect x="40" y="60" width="720" height="350" class="outer"/>
+  <text x="56" y="80" class="sub">FIPS Node</text>
+
+  <!-- === Application layer === -->
+  <!-- FIPS-native API (left) -->
+  <rect x="180" y="90" width="200" height="50" class="layer api"/>
+  <text x="280" y="108" text-anchor="middle" class="label">FIPS-Native API</text>
+  <text x="280" y="121" text-anchor="middle" class="sub">Datagram service</text>
+  <text x="280" y="133" text-anchor="middle" class="sub">Addressed by npub</text>
+
+  <!-- IPv6 TUN adapter (right) -->
+  <rect x="400" y="90" width="200" height="50" class="layer tun"/>
+  <text x="500" y="108" text-anchor="middle" class="label">IPv6 TUN Adapter</text>
+  <text x="500" y="121" text-anchor="middle" class="sub">fips0 + DNS (.fips)</text>
+  <text x="500" y="133" text-anchor="middle" class="sub">npub → fd00::/8 IPv6</text>
+
+  <!-- External app labels -->
+  <text x="280" y="74" text-anchor="middle" class="sub">FIPS-aware apps</text>
+  <text x="500" y="74" text-anchor="middle" class="sub">Legacy IP apps (ping, curl, ...)</text>
+
+  <!-- Arrows from apps down to API/TUN -->
+  <line x1="280" y1="78" x2="280" y2="90" class="conn"/>
+  <line x1="500" y1="78" x2="500" y2="90" class="conn"/>
+
+  <!-- === FSP Layer === -->
+  <rect x="80" y="170" width="620" height="50" class="layer fsp"/>
+  <text x="390" y="191" text-anchor="middle" class="label">FIPS Session Protocol (FSP)</text>
+  <text x="390" y="205" text-anchor="middle" class="sub">End-to-end encryption · Session lifecycle · Path discovery · In-band metrics</text>
+
+  <!-- Connections: API/TUN → FSP -->
+  <line x1="280" y1="140" x2="280" y2="170" class="conn"/>
+  <line x1="500" y1="140" x2="500" y2="170" class="conn"/>
+
+  <!-- === FMP Layer === -->
+  <rect x="80" y="240" width="620" height="50" class="layer fmp"/>
+  <text x="390" y="261" text-anchor="middle" class="label">FIPS Mesh Protocol (FMP)</text>
+  <text x="390" y="275" text-anchor="middle" class="sub">Link encryption · Spanning tree · Bloom filters · Routing · Peer management</text>
+
+  <!-- Connection: FSP → FMP -->
+  <line x1="390" y1="220" x2="390" y2="240" class="conn"/>
+
+  <!-- === FMP → Transport connections === -->
+  <!-- Single vertical trunk from FMP bottom center -->
+  <line x1="390" y1="290" x2="390" y2="312" class="conn"/>
+
+  <!-- Horizontal bar at branch point -->
+  <line x1="155" y1="312" x2="625" y2="312" class="conn"/>
+
+  <!-- Vertical drops to each category group outline -->
+  <line x1="155" y1="312" x2="155" y2="336" class="conn"/>
+  <line x1="390" y1="312" x2="390" y2="336" class="conn"/>
+  <line x1="625" y1="312" x2="625" y2="336" class="conn"/>
+
+  <!-- === Transport layer === -->
+
+  <!-- Overlay transports -->
+  <rect x="80" y="336" width="216" height="60" class="cat"/>
+  <text x="188" y="349" text-anchor="middle" class="cat">Overlay</text>
+
+  <rect x="92" y="356" width="60" height="30" class="layer xport"/>
+  <text x="122" y="371" text-anchor="middle" font-size="10" font-weight="bold" fill="#e0e0e0">UDP</text>
+  <text x="122" y="381" text-anchor="middle" class="sub">IP</text>
+
+  <rect x="158" y="356" width="60" height="30" class="layer xport"/>
+  <text x="188" y="371" text-anchor="middle" font-size="10" font-weight="bold" fill="#e0e0e0">TCP</text>
+  <text x="188" y="381" text-anchor="middle" class="sub">IP</text>
+
+  <rect x="224" y="356" width="60" height="30" class="layer xport"/>
+  <text x="254" y="371" text-anchor="middle" font-size="10" font-weight="bold" fill="#e0e0e0">Tor</text>
+  <text x="254" y="381" text-anchor="middle" class="sub">.onion</text>
+
+  <!-- Shared medium transports -->
+  <rect x="306" y="336" width="234" height="60" class="cat"/>
+  <text x="423" y="349" text-anchor="middle" class="cat">Shared Medium</text>
+
+  <rect x="318" y="356" width="60" height="30" class="layer xport"/>
+  <text x="348" y="371" text-anchor="middle" font-size="10" font-weight="bold" fill="#e0e0e0">Ether</text>
+  <text x="348" y="381" text-anchor="middle" class="sub">802.3</text>
+
+  <rect x="384" y="356" width="60" height="30" class="layer xport"/>
+  <text x="414" y="371" text-anchor="middle" font-size="10" font-weight="bold" fill="#e0e0e0">BLE</text>
+  <text x="414" y="381" text-anchor="middle" class="sub">L2CAP</text>
+
+  <rect x="450" y="356" width="80" height="30" class="layer xport"/>
+  <text x="490" y="371" text-anchor="middle" font-size="10" font-weight="bold" fill="#e0e0e0">Radio ...</text>
+  <text x="490" y="381" text-anchor="middle" class="sub">future</text>
+
+  <!-- Point-to-point transports -->
+  <rect x="550" y="336" width="150" height="60" class="cat"/>
+  <text x="625" y="349" text-anchor="middle" class="cat">Point-to-Point</text>
+
+  <rect x="562" y="356" width="126" height="30" class="layer xport"/>
+  <text x="625" y="371" text-anchor="middle" font-size="10" font-weight="bold" fill="#e0e0e0">Serial ...</text>
+  <text x="625" y="381" text-anchor="middle" class="sub">future</text>
+
+  <!-- === Peer networks below node box === -->
+  <text x="155" y="436" text-anchor="middle" class="sub">Internet / Overlay Peers</text>
+  <line x1="155" y1="410" x2="155" y2="426" class="peer"/>
+
+  <text x="390" y="436" text-anchor="middle" class="sub">Local / Radio Peers</text>
+  <line x1="390" y1="410" x2="390" y2="426" class="peer"/>
+
+  <text x="625" y="436" text-anchor="middle" class="sub">Wired Peers</text>
+  <line x1="625" y1="410" x2="625" y2="426" class="peer"/>
+
+  <!-- === Legend === -->
+  <rect x="40" y="458" width="720" height="88" fill="#151520" stroke="#404060" stroke-width="1" rx="4"/>
+
+  <rect x="60" y="476" width="24" height="14" class="layer api"/>
+  <text x="92" y="488" class="sub">Application interface</text>
+
+  <rect x="60" y="496" width="24" height="14" class="layer tun"/>
+  <text x="92" y="508" class="sub">IPv6 compatibility layer</text>
+
+  <rect x="300" y="476" width="24" height="14" class="layer fsp"/>
+  <text x="332" y="488" class="sub">FSP — end-to-end session encryption</text>
+
+  <rect x="300" y="496" width="24" height="14" class="layer fmp"/>
+  <text x="332" y="508" class="sub">FMP — mesh routing and link encryption</text>
+
+  <rect x="590" y="476" width="24" height="14" class="layer xport"/>
+  <text x="622" y="488" class="sub">Transport plugin</text>
+
+  <rect x="590" y="496" width="24" height="14" fill="none" stroke="#404060" stroke-width="1" stroke-dasharray="4,3" rx="2"/>
+  <text x="622" y="508" class="sub">Transport category</text>
+
+  <text x="300" y="536" class="sub">All transports use the same FMP protocol</text>
+</svg>

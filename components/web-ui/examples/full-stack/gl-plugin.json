@@ -1,0 +1,24 @@
+{
+  "$schema": "../../schema/gl-plugin.schema.json",
+  "schemaVersion": 1,
+  "id": "full-stack",
+  "profile": "full-stack",
+  "compatibility": {
+    "minimumFirmware": "4.8.0",
+    "requiredComponents": ["gl-button", "gl-card", "gl-tips", "gl-title"],
+    "requiredCapabilities": []
+  },
+  "package": {
+    "name": "gl-sdk4-ui-full-stack",
+    "architecture": "all",
+    "section": "base",
+    "description": "Full-stack reference plugin for gl-sdk4-plugin-kit",
+    "depends": ["libc", "gl-sdk4-ui-core", "gl-oui-rpc", "ubus", "jsonfilter", "uci"],
+    "conffiles": ["/etc/config/full-stack"]
+  },
+  "overlay": "overlay",
+  "lifecycle": {
+    "postinst": "hooks/postinst",
+    "prerm": "hooks/prerm"
+  }
+}

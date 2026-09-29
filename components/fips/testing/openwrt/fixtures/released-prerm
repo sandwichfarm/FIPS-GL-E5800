@@ -1,0 +1,6 @@
+#!/bin/sh
+/etc/init.d/fips-gateway stop    2>/dev/null || true
+/etc/init.d/fips-gateway disable 2>/dev/null || true
+/etc/init.d/fips stop            2>/dev/null || true
+/etc/init.d/fips disable         2>/dev/null || true
+exit 0

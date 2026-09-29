@@ -1,0 +1,430 @@
+# Static Docker Network Test Harness
+
+Multi-node integration test for FIPS using Docker containers with fixed
+topologies. Multiple topologies are provided: a sparse mesh (5 nodes, 6
+links), a linear chain (5 nodes, 4 links), a gateway topology (3 nodes plus a
+non-FIPS LAN client), and three rekey variants. All exercise the full FIPS
+stack including TUN devices, DNS resolution, peer link encryption, spanning
+tree construction, and discovery-driven multi-hop routing.
+
+## Prerequisites
+
+- Docker with the compose plugin
+- Rust toolchain (for building the FIPS binary)
+- Python 3 (for identity derivation; stdlib only, no packages required)
+
+## Quick Start
+
+Build the binaries and images, then generate the node configs:
+
+```bash
+./testing/scripts/build.sh
+./testing/static/scripts/generate-configs.sh mesh
+```
+
+`build.sh` is the shared harness builder and is run from the repo root; it
+does not generate configs.
+
+Start the mesh (default topology):
+
+```bash
+docker compose -f testing/static/docker-compose.yml up -d
+./testing/static/scripts/ping-test.sh mesh      # 20/20 expected
+./testing/static/scripts/iperf-test.sh mesh     # bandwidth test
+docker compose -f testing/static/docker-compose.yml down
+```
+
+The mesh profile is activated by default via `.env`. To use a different
+topology, specify the profile explicitly:
+
+```bash
+docker compose -f testing/static/docker-compose.yml --profile chain up -d
+./testing/static/scripts/ping-test.sh chain
+docker compose -f testing/static/docker-compose.yml --profile chain down
+```
+
+## Topologies
+
+### Mesh
+
+![Mesh Topology](docker-mesh-topology.svg)
+
+Five nodes with 6 bidirectional UDP links forming a sparse, fully connected
+graph. Not all nodes are direct peers -- non-adjacent pairs require
+discovery-driven multi-hop routing to establish end-to-end sessions.
+
+The spanning tree is rooted at node A, which has the lexicographically
+smallest `NodeAddr` (the first 16 bytes of `SHA-256(pubkey)`). Tree edges
+are highlighted in blue in the diagram above.
+
+The ping test exercises all 20 directed pairs (5 nodes x 4 targets each),
+covering both direct-peer and multi-hop paths.
+
+| Link   | Type                        |
+| ------ | --------------------------- |
+| A -- D | tree edge (D's parent is A) |
+| A -- E | tree edge (E's parent is A) |
+| C -- D | tree edge (C's parent is D) |
+| B -- C | tree edge (B's parent is C) |
+| D -- E | non-tree link               |
+| C -- E | non-tree link               |
+
+### Chain
+
+![Chain Topology](docker-chain-topology.svg)
+
+Five nodes in a linear chain: A -- B -- C -- D -- E. Each node peers only with
+its immediate neighbors. Multi-hop communication (e.g., A to E) requires the
+discovery protocol to find routes through intermediate nodes.
+
+The ping test covers:
+
+- Adjacent hops: A->B, B->C (1 hop each)
+- Multi-hop: A->C (2 hops), A->D (3 hops), A->E (4 hops)
+- Reverse: E->A (4 hops)
+
+### Gateway
+
+Three FIPS nodes: a gateway (`a`) with a LAN interface, and two mesh
+destinations (`b`, `c`) directly peered with it. A non-FIPS client container
+attaches to the gateway's LAN interface. Two destinations are required so the
+multi-client phase of `gateway-test.sh` can allocate distinct virtual-IP
+mappings, one per LAN client. Identities are derived deterministically from
+the mesh name `gateway-test`.
+
+### Rekey
+
+Same sparse mesh as the mesh topology (5 nodes, 6 links). Configs are
+post-processed to use aggressive rekey timers (35s) for CI testing. The
+`rekey-test.sh` script handles config injection and multi-phase verification.
+
+### Rekey-Accept-Off
+
+The rekey topology with `transports.udp.accept_connections: false` set on
+node B, the single-peer node auto-connected to C. Pins the regression where a
+rekey `msg1` arriving at an auto-connect initiator with accept off was dropped
+by the Node-level admission gate.
+
+### Rekey-Outbound-Only
+
+The rekey topology with `transports.udp.outbound_only: true` on node B, whose
+peer-C address is also rewritten to the Docker hostname (`node-c:2121`). Pins
+the regression where the hostname-versus-numeric mismatch made the
+`addr_to_link` lookup miss and the admission carve-out fall through.
+
+## Configuration Management
+
+### File Structure
+
+```text
+testing/static/
+├── docker-compose.yml                  # Service definitions for all topologies
+├── docker-compose.gateway-external-net.yml  # Gateway on an external network
+├── .env                                # Default compose profile
+├── configs/
+│   ├── node.template.yaml              # Template for all node configs
+│   ├── gateway-resolv.conf             # LAN client resolver config
+│   └── topologies/
+│       ├── mesh.yaml                   # Mesh topology definition
+│       ├── chain.yaml                  # Chain topology definition
+│       ├── gateway.yaml                # Gateway integration test (3 nodes)
+│       ├── rekey.yaml                  # Rekey integration test (5 nodes)
+│       ├── rekey-accept-off.yaml       # Rekey with accept_connections off
+│       └── rekey-outbound-only.yaml    # Rekey with outbound_only
+├── generated-configs/                  # Auto-generated, run-scoped (gitignored)
+│   ├── npubs.env                       # NPUB_A=..., NPUB_B=..., etc.
+│   ├── mesh/
+│   │   ├── node-a.yaml ... node-e.yaml
+│   └── chain/
+│       ├── node-a.yaml ... node-e.yaml
+├── scripts/
+│   ├── generate-configs.sh             # Generate node configs from topology
+│   ├── ping-test.sh                    # Connectivity test
+│   ├── iperf-test.sh                   # Bandwidth test
+│   ├── iperf-compare-refs.sh           # Bandwidth comparison across refs
+│   ├── bench-multirun.sh               # Repeated benchmark runs
+│   ├── gateway-test.sh                 # Gateway integration test
+│   ├── rekey-test.sh                   # Rekey integration test
+│   ├── admission-cap-test.sh           # Peer admission cap test
+│   └── netem.sh                        # Network impairment
+├── docker-mesh-topology.svg            # Mesh topology diagram
+└── docker-chain-topology.svg           # Chain topology diagram
+```
+
+The container image definition (`Dockerfile`), its entrypoint and the
+`resolv.conf` that points at the FIPS resolver are shared with the other
+harnesses and live in `testing/docker/`. The identity-derivation helper is
+`testing/lib/derive_keys.py`.
+
+### Topology Files
+
+Each topology file in `configs/topologies/` defines:
+
+- **Node identities**: nsec (hex) and npub (bech32) for each node
+- **Addresses**: `docker_ip` for Docker-managed nodes, `external_ip` for
+  remote nodes not managed by Docker
+- **Peer connections**: which nodes peer with each other
+- **`docker_host`** (optional): the compose `hostname:` this node answers to,
+  when that is not `node-<id>`. Only the gateway topology needs it
+
+Generated peer addresses use the **docker hostname**, not `docker_ip`.
+`fips-net` requests no subnet, so docker assigns one from its own pool and two
+concurrent CI runs can bring the topology up at the same time instead of one
+of them failing with `Pool overlaps`. `docker_ip` is retained as documentation
+of the topology's shape and as the internal/external discriminator; an
+external node keeps its `external_ip` in peer blocks, its address not being
+ours to assign.
+
+Example entry:
+
+```yaml
+nodes:
+  a:
+    nsec: "0102030405060708..."
+    npub: "npub1sjlh2c3..."
+    docker_ip: "172.20.0.10"
+    peers: [d, e]
+```
+
+External nodes use `external_ip` instead of `docker_ip`. Config generation
+skips external nodes (they run outside Docker) but includes their identity
+in peer blocks and the npubs environment file.
+
+### Generating Configs
+
+```bash
+./testing/static/scripts/generate-configs.sh <topology> [mesh-name]
+```
+
+This reads the topology definition and generates:
+
+1. Per-node YAML config files in `generated-configs/<topology>/`
+2. `generated-configs/npubs.env` with all node npubs as environment variables
+
+Under `ci-local.sh` the directory is `generated-configs-<run-id>`, so
+concurrent runs cannot overwrite each other's node configs; the compose file
+and every test script read the same `FIPS_CI_NAME_SUFFIX` and follow it. A
+bare invocation leaves the suffix unset and writes the plain path.
+
+The `npubs.env` file is sourced by the test scripts and injected into
+Docker containers via `env_file` in `docker-compose.yml`.
+
+`testing/scripts/build.sh` compiles the binaries and builds the images; run
+`generate-configs.sh` separately afterwards.
+
+### Adding a New Topology
+
+1. Create `configs/topologies/<name>.yaml` following the format of
+   `mesh.yaml`
+2. Add corresponding service definitions to `docker-compose.yml` with
+   `profiles: ["<name>"]`
+3. Run `./testing/static/scripts/generate-configs.sh <name>` to generate configs
+
+## Deterministic Mesh Identity Derivation
+
+When running multiple test meshes that may peer with the same external node,
+each mesh needs unique node identities to avoid key conflicts. The optional
+`mesh-name` parameter generates deterministic per-mesh identities:
+
+```bash
+./testing/static/scripts/generate-configs.sh mesh my-mesh-1
+./testing/static/scripts/generate-configs.sh chain my-mesh-1
+```
+
+### How It Works
+
+For each Docker node (those with `docker_ip`), the identity is derived as:
+
+```text
+nsec = sha256(mesh_name + "|" + node_id)    # e.g., sha256("my-mesh-1|a")
+npub = bech32("npub", secp256k1_pubkey(nsec))
+```
+
+External nodes (those with `external_ip`) always keep their hardcoded
+identity from the topology YAML, since they represent real nodes outside
+the test environment.
+
+Without a mesh name, the identities from the topology YAML are used as-is
+(the original behavior).
+
+### The derive_keys.py Script
+
+The derivation is performed by `testing/lib/derive_keys.py`, a standalone tool
+with no external dependencies (pure Python stdlib: hashlib for SHA-256,
+manual secp256k1 scalar multiplication, and BIP-173 bech32 encoding):
+
+```bash
+$ python3 testing/lib/derive_keys.py my-mesh-1 a
+nsec=<64-char-hex>
+npub=npub1...
+```
+
+### The npubs.env File
+
+Every run of `generate-configs.sh` writes `generated-configs/npubs.env`
+containing all node npubs, whether derived or from the topology YAML:
+
+```text
+NPUB_A=npub1...
+NPUB_B=npub1...
+NPUB_C=npub1...
+NPUB_D=npub1...
+NPUB_E=npub1...
+```
+
+This file is:
+
+- **Sourced by test scripts** (`ping-test.sh`, `iperf-test.sh`) to resolve
+  node identities for DNS lookups
+- **Injected into containers** via the `env_file` directive in
+  `docker-compose.yml`, making `$NPUB_A` etc. available as environment
+  variables inside each container
+
+## Performance Testing
+
+```bash
+./testing/static/scripts/iperf-test.sh [mesh|chain]
+./testing/static/scripts/iperf-test.sh mesh --live   # show live iperf3 output
+```
+
+Runs iperf3 with:
+
+- Duration: 10 seconds (`-t 10`)
+- Parallel streams: 8 (`-P 8`)
+- Protocol: TCP over IPv6
+
+For before/after measurements across commits or branches:
+
+```bash
+./testing/static/scripts/iperf-compare-refs.sh origin/master HEAD mesh
+```
+
+The comparison script builds each ref into a separate Docker image, runs the
+same topology and `iperf3` settings for both images, and prints a bandwidth
+summary. Override `DURATION`, `PARALLEL`, `SETTLE_SECONDS`, `IPERF_TIMEOUT`,
+or `RUNS` in the environment when needed. `RUNS` is the total number of
+measurements per ref; for example, `RUNS=3` runs each ref three times and
+prints both per-run and aggregate tables.
+
+## Network Impairment
+
+The `netem.sh` script simulates adverse network conditions using `tc`/`netem`
+on all running containers:
+
+```bash
+./testing/static/scripts/netem.sh [mesh|chain] <apply|remove|status> [options]
+```
+
+### Options
+
+| Option | Description |
+| ------ | ----------- |
+| `--delay <ms>` | Fixed delay in milliseconds |
+| `--jitter <ms>` | Delay variation (requires `--delay`) |
+| `--loss <percent>` | Packet loss percentage |
+| `--loss-corr <percent>` | Loss correlation for bursty loss |
+| `--duplicate <percent>` | Packet duplication percentage |
+| `--reorder <percent>` | Packet reordering probability (requires `--delay`) |
+| `--corrupt <percent>` | Bit-level corruption percentage |
+
+### Presets
+
+| Preset | Parameters |
+| ------ | ---------- |
+| `lossy` | 5% loss, 25% correlation |
+| `congested` | 50ms delay, 20ms jitter, 2% loss |
+| `terrible` | 100ms delay, 40ms jitter, 10% loss, 1% dup, 5% reorder |
+
+### Examples
+
+```bash
+# Apply 50ms delay with 5% packet loss
+./testing/static/scripts/netem.sh mesh apply --delay 50 --loss 5
+
+# Use a preset
+./testing/static/scripts/netem.sh chain apply --preset congested
+
+# Check current rules
+./testing/static/scripts/netem.sh mesh status
+
+# Remove all impairment
+./testing/static/scripts/netem.sh mesh remove
+```
+
+Rules are applied to egress on each container's `eth0` interface. With all
+containers impaired equally, both directions of every link see the effect.
+The script uses `tc qdisc replace` so it can be re-run safely without
+removing rules first.
+
+## Container Configuration
+
+- **Base image**: debian:bookworm-slim
+- **Capabilities**: `CAP_NET_ADMIN` (for TUN device creation)
+- **Devices**: `/dev/net/tun` mapped into each container
+- **DNS**: FIPS built-in resolver on `127.0.0.1:53`
+- **Transport**: UDP on port 2121 (MTU 1472) or TCP on port 8443
+- **TUN**: `fips0` interface, MTU 1280
+
+Each node resolves `<npub>.fips` DNS names to FIPS IPv6 addresses via its
+local DNS responder, which primes the identity cache for session establishment.
+
+### Background Services
+
+Each container runs the following services alongside FIPS:
+
+| Service | Port | Description                                   |
+| ------- | ---- | --------------------------------------------- |
+| SSH     | 22   | Root login with no password (test only)       |
+| iperf3  | 5201 | Bandwidth testing server (`-s -D`)            |
+| HTTP    | 80 | Python HTTP server serving `/root/index.html` |
+
+All services bind to IPv6 (`::`) and are accessible over the FIPS overlay
+using `<npub>.fips` hostnames:
+
+```bash
+# HTTP over FIPS
+docker exec fips-node-b curl http://$NPUB_A.fips
+
+# SSH over FIPS
+docker exec fips-node-b ssh $NPUB_A.fips
+
+# iperf3 over FIPS
+docker exec fips-node-b iperf3 -c $NPUB_A.fips
+```
+
+## Troubleshooting
+
+**Stale images after code changes**: Docker compose may cache old layers.
+Force a clean rebuild:
+
+```bash
+docker compose -f testing/static/docker-compose.yml build --no-cache
+```
+
+**Check node logs**:
+
+```bash
+docker logs fips-node-a
+docker logs -f fips-node-c    # follow
+```
+
+**Verify DNS resolution inside a container**:
+
+```bash
+docker exec fips-node-a dig AAAA <npub>.fips @127.0.0.1
+```
+
+**Verify binary is up to date**: Compare hashes between the local build and
+the binary inside the container:
+
+```bash
+md5sum testing/docker/fips
+docker exec fips-node-a md5sum /usr/local/bin/fips
+```
+
+**Increase convergence time**: If tests fail intermittently, the 5-second
+convergence wait in `ping-test.sh` may be insufficient. Edit the `sleep`
+value at the top of the script.
+
+**Missing npubs.env**: If test scripts fail with "npubs.env not found", run
+`./testing/static/scripts/generate-configs.sh mesh` (or your topology) first.

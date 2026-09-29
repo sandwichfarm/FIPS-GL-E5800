@@ -1,0 +1,9 @@
+{
+  "index": 86,
+  "view": "network-info",
+  "title": {
+    "translate": "network-info.title"
+  },
+  "icon": "network",
+  "level": 1
+}

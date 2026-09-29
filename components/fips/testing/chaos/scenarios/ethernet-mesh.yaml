@@ -1,0 +1,117 @@
+# Mixed transport mesh: 6 nodes, UDP + Ethernet edges
+#
+# Exercises both transports in a single mesh. UDP edges use static
+# peer config; Ethernet edges use beacon discovery. Tests that the
+# spanning tree converges across heterogeneous transports with netem
+# and link flaps active, and that datagrams are delivered over the
+# Ethernet links (the delivery assertion below).
+#
+# Topology:
+#
+#   n01 ---udp--- n02 ---udp--- n03
+#    |             |              |
+#   eth           eth            udp
+#    |             |              |
+#   n04 ---eth--- n05 ---udp--- n06
+#
+# UDP edges: n01-n02, n02-n03, n03-n06, n05-n06
+# Ethernet edges: n01-n04, n02-n05, n04-n05
+
+scenario:
+  name: "ethernet-mesh"
+  seed: 42
+  duration_secs: 120
+
+topology:
+  algorithm: explicit
+  num_nodes: 6
+  params:
+    adjacency:
+      - [n01, n02, udp]
+      - [n02, n03, udp]
+      - [n03, n06, udp]
+      - [n05, n06, udp]
+      - [n01, n04, ethernet]
+      - [n02, n05, ethernet]
+      - [n04, n05, ethernet]
+
+netem:
+  enabled: true
+  default_policy:
+    delay_ms: [1, 10]
+    jitter_ms: [0, 2]
+    loss_pct: [0, 1]
+  mutation:
+    interval_secs: {min: 20, max: 40}
+    fraction: 0.3
+    policies:
+      normal:
+        delay_ms: [1, 10]
+        loss_pct: [0, 1]
+      degraded:
+        delay_ms: [30, 80]
+        jitter_ms: [5, 20]
+        loss_pct: [3, 8]
+
+link_flaps:
+  enabled: true
+  interval_secs: {min: 20, max: 40}
+  max_down_links: 1
+  down_duration_secs: {min: 10, max: 20}
+  protect_connectivity: true
+
+traffic:
+  enabled: false
+
+# Baseline: the mesh came up, agreed on a root, and took parents. It
+# says nothing about the data plane; it exists so that a run in which
+# the mesh never formed cannot report success. Six nodes, one root, five
+# parented in all six provably-completed archived runs.
+#
+# Delivery: the one assertion anywhere in CI that a datagram crossed an
+# Ethernet link. n04's only edges are Ethernet (n01-n04, n04-n05), so a
+# probe to or from n04 must cross one, provided n04 has no peer on
+# another transport; its container also sits on the docker network, so
+# that is checked, not assumed: n04's peers are read before and after
+# the probe, and the assertion fails if it has none or any is not
+# Ethernet. n04 -> n06 and n06 -> n04 cross Ethernet and then UDP;
+# n04 -> n05 is a direct Ethernet hop.
+#
+# Load-robust by shape: each pair and size is pinged one packet at a
+# time until 3 replies or 60 s, and the verdict is whether that
+# happened, not a loss ratio, so a busy host slows it without failing
+# it. It runs at teardown, after flapped links are restored.
+#
+# Recovery: a tree or bloom announce lost to a flap is resent from the
+# link's receiver reports a few seconds after the link returns, or within
+# about 30 s when those reports cannot confirm it; only a per-peer backoff
+# built up by earlier resends on a lossy link can hold a resend longer, up
+# to 60 s after the previous one. The 60 s window therefore no longer sits
+# at the ordinary recovery bound, and a red here is investigated, not
+# expected.
+#
+# Sizes: payload 0 is the smallest ICMPv6 echo and 1200 is near the
+# 1280-byte TUN MTU. Neither can reach the receiver's padding trim on a
+# veth link. Measured on a live run of this scenario (2026-09-19): an
+# empty echo is a 226-byte Ethernet frame and a 1200-byte one 1342
+# bytes, far above the 60-byte minimum; and the veth does not pad the
+# frames that are shorter (54-byte control frames and 48-byte beacons
+# arrived as sent; none of 250 received data frames carried bytes past
+# its length field). That trim is covered instead by the unit tests on the receive loop's
+# data-frame parse (data_payload in src/transport/ethernet/mod.rs).
+assertions:
+  baseline:
+    min_nodes_reporting: 6
+    max_roots: 1
+    min_nodes_parented: 5
+  delivery:
+    pairs: [[n04, n06], [n06, n04], [n04, n05]]
+    payload_bytes: [0, 1200]
+    min_replies: 3
+    deadline_secs: 60
+    require_transport: ethernet
+    transport_node: n04
+
+logging:
+  rust_log: "info"
+  output_dir: "./sim-results"

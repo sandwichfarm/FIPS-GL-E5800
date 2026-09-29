@@ -1,0 +1,4 @@
+#!/bin/sh
+
+# Keep lifecycle hooks idempotent. Package files are installed by default_postinst.
+exit 0

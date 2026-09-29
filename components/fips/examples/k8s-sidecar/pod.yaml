@@ -1,0 +1,207 @@
+# FIPS Kubernetes sidecar — example Pod manifest
+#
+# WARNING: The Secret below contains a placeholder nsec. Replace it with your
+# real key before applying. Do NOT commit real keys to version control.
+# Generate a fresh key with: openssl rand -hex 32
+#
+# Apply:
+#   kubectl apply -f pod.yaml
+#
+# Requirements on the node:
+#   - /dev/net/tun must exist (standard on all modern Linux kernels)
+#   - The container runtime must honour NET_ADMIN (true for containerd/CRI-O
+#     with default settings; may require a RuntimeClass tweak for gVisor)
+#
+# Kubernetes version: 1.28+
+
+# -----------------------------------------------------------------------------
+# Secret — node identity
+# Replace the nsec value with your real key (hex or nsec1 bech32).
+# In production, manage this with a secrets operator (External Secrets,
+# Sealed Secrets, Vault Agent, etc.) rather than a plaintext manifest.
+# -----------------------------------------------------------------------------
+apiVersion: v1
+kind: Secret
+metadata:
+  name: fips-identity
+type: Opaque
+stringData:
+  nsec: "replace-this-with-your-hex-or-nsec1-secret-key"
+
+---
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: fips-sidecar-example
+  labels:
+    app: fips-sidecar-example
+spec:
+  # Containers in the same Pod share the same network namespace automatically.
+  # The fips sidecar creates fips0; the app container sees it immediately.
+  #
+  # Start order: initContainers run first, then all containers start
+  # concurrently. If your app needs the TUN interface to be ready before it
+  # starts, use a readiness probe on the sidecar and a dependency in the app
+  # (or use a startup init container that waits for fips0 to appear).
+
+  # net.ipv6.* sysctls are namespaced per-pod in Linux. Declaring them here
+  # allows the fips sidecar entrypoint to set them at runtime via sysctl(8).
+  # bindv6only=0 means apps listening on 0.0.0.0 will also receive IPv6
+  # connections arriving via fips0, without needing to be rewritten.
+  # These are "unsafe" sysctls and require the kubelet --allowed-unsafe-sysctls
+  # flag or a corresponding RuntimeClass / PodSecurityPolicy exception.
+  securityContext:
+    sysctls:
+      - name: net.ipv6.conf.all.disable_ipv6
+        value: "0"
+      - name: net.ipv6.conf.default.disable_ipv6
+        value: "0"
+      - name: net.ipv6.bindv6only
+        value: "0"
+
+  volumes:
+    - name: tun-device
+      hostPath:
+        path: /dev/net/tun
+        type: CharDevice
+    # Optional: mount a pre-built fips.yaml instead of generating from env.
+    # - name: fips-config
+    #   configMap:
+    #     name: fips-config
+
+  containers:
+    # -----------------------------------------------------------------------
+    # FIPS sidecar — owns the network namespace setup
+    # -----------------------------------------------------------------------
+    - name: fips
+      image: your-registry.example.com/fips-sidecar:latest
+      imagePullPolicy: Always
+
+      securityContext:
+        capabilities:
+          add:
+            - NET_ADMIN   # required: TUN creation and iptables
+        runAsNonRoot: false  # fips needs root for iptables/TUN
+        runAsUser: 0
+
+      volumeMounts:
+        - name: tun-device
+          mountPath: /dev/net/tun
+
+      env:
+        # --- Identity (required) ---
+        - name: FIPS_NSEC
+          valueFrom:
+            secretKeyRef:
+              name: fips-identity
+              key: nsec
+
+        # --- Single peer shorthand ---
+        # Remove these and use FIPS_PEERS_JSON below for multiple peers.
+        - name: FIPS_PEER_NPUB
+          value: ""           # e.g. npub1abc...
+        - name: FIPS_PEER_ADDR
+          value: ""           # e.g. 203.0.113.10:2121
+        - name: FIPS_PEER_ALIAS
+          value: "gateway"
+        - name: FIPS_PEER_TRANSPORT
+          value: "udp"
+
+        # --- Multiple peers via JSON (overrides single-peer vars when non-empty) ---
+        # - name: FIPS_PEERS_JSON
+        #   value: |
+        #     [
+        #       {"npub":"npub1abc...","alias":"gw1","addr":"203.0.113.10:2121","transport":"udp"},
+        #       {"npub":"npub1def...","alias":"gw2","addr":"198.51.100.5:2121","transport":"udp"}
+        #     ]
+
+        # --- Transport tuning ---
+        - name: FIPS_UDP_BIND
+          value: "0.0.0.0:2121"
+        # Uncomment to enable TCP transport (useful on networks that block UDP):
+        # - name: FIPS_TCP_BIND
+        #   value: "0.0.0.0:8443"
+
+        # --- TUN interface ---
+        - name: FIPS_TUN_NAME
+          value: "fips0"
+        - name: FIPS_TUN_MTU
+          value: "1280"
+
+        # --- Network isolation ---
+        # "false" — fips0 is added alongside normal cluster networking. eth0
+        # continues to work as usual (services, DNS, other pods all reachable).
+        # "true"  — eth0 is locked to FIPS transport only; app can only talk
+        #           via fips0. Use for high-security mesh-only deployments.
+        - name: FIPS_ISOLATE
+          value: "false"
+        # Adjust if your CNI names the pod interface differently (e.g. ens3, net1).
+        - name: FIPS_POD_IFACE
+          value: "eth0"
+
+        # --- DNS ---
+        # Set to "false" if you manage pod DNS externally.
+        - name: FIPS_REWRITE_DNS
+          value: "true"
+
+        # --- Logging ---
+        - name: RUST_LOG
+          value: "info"
+
+      ports:
+        - name: fips-udp
+          containerPort: 2121
+          protocol: UDP
+        # - name: fips-tcp
+        #   containerPort: 8443
+        #   protocol: TCP
+
+      readinessProbe:
+        exec:
+          command: ["fipsctl", "show", "status"]
+        initialDelaySeconds: 5
+        periodSeconds: 10
+        failureThreshold: 3
+
+      livenessProbe:
+        exec:
+          command: ["fipsctl", "show", "status"]
+        initialDelaySeconds: 15
+        periodSeconds: 30
+        failureThreshold: 3
+
+      resources:
+        requests:
+          cpu: "50m"
+          memory: "32Mi"
+        limits:
+          cpu: "500m"
+          memory: "128Mi"
+
+    # -----------------------------------------------------------------------
+    # App container — shares the network namespace created by the fips sidecar
+    # -----------------------------------------------------------------------
+    - name: app
+      image: your-app:latest
+      imagePullPolicy: IfNotPresent
+
+      # No special capabilities needed — app uses fips0 like a normal interface.
+      securityContext:
+        runAsNonRoot: true
+
+      # The app sees: lo, eth0 (isolated by iptables), fips0 (mesh).
+      # All outbound traffic from the app flows through fips0.
+      # DNS resolution for <npub>.fips names works via dnsmasq on 127.0.0.1.
+      command: ["sleep", "infinity"]  # replace with your actual workload command
+
+      resources:
+        requests:
+          cpu: "100m"
+          memory: "64Mi"
+        limits:
+          cpu: "1000m"
+          memory: "512Mi"
+
+  # Restart policy for the Pod. Use "Always" for long-running workloads.
+  restartPolicy: Always

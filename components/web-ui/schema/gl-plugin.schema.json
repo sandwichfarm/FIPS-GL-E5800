@@ -1,0 +1,146 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/go-wombat/gl-sdk4-plugin-kit/main/schema/gl-plugin.schema.json",
+  "title": "GL SDK4 plugin manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "id", "profile"],
+  "properties": {
+    "$schema": { "type": "string", "format": "uri-reference" },
+    "schemaVersion": { "const": 1 },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$"
+    },
+    "profile": { "enum": ["ui-only", "full-stack"] },
+    "views": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "entry", "menu"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$"
+          },
+          "entry": { "$ref": "#/$defs/projectPath" },
+          "menu": { "$ref": "#/$defs/projectPath" }
+        }
+      }
+    },
+    "compatibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "minimumFirmware": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+(?:\\.[0-9]+)?(?:[-+ ].*)?$"
+        },
+        "requiredComponents": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9-]*$"
+          },
+          "uniqueItems": true
+        },
+        "requiredCapabilities": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "clients",
+              "wifi",
+              "network",
+              "firewall",
+              "dns",
+              "repeater",
+              "plugins",
+              "ui",
+              "vpn-client",
+              "wireguard-client",
+              "openvpn-client",
+              "adguardhome",
+              "ipv6",
+              "tor",
+              "tailscale",
+              "zerotier",
+              "fan",
+              "modem",
+              "sqm",
+              "dpi"
+            ]
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "package": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "pattern": "^[a-z0-9][a-z0-9+._-]*$" },
+        "architecture": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9.+_-]*$" },
+        "section": { "type": "string", "minLength": 1 },
+        "source": { "type": "string", "minLength": 1 },
+        "description": { "type": "string", "minLength": 1 },
+        "depends": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1, "pattern": "^[^\\r\\n]+$" }
+        },
+        "conffiles": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/packagePath" },
+          "uniqueItems": true
+        }
+      }
+    },
+    "overlay": { "$ref": "#/$defs/projectPath" },
+    "lifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "preinst": { "$ref": "#/$defs/projectPath" },
+        "postinst": { "$ref": "#/$defs/projectPath" },
+        "prerm": { "$ref": "#/$defs/projectPath" },
+        "postrm": { "$ref": "#/$defs/projectPath" }
+      }
+    }
+  },
+  "$defs": {
+    "projectPath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!\\.$)(?!/)(?![A-Za-z]:/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$"
+    },
+    "packagePath": {
+      "type": "string",
+      "pattern": "^/(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+[^/]$"
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "profile": { "const": "ui-only" } }, "required": ["profile"] },
+      "then": {
+        "not": {
+          "anyOf": [
+            { "required": ["overlay"] },
+            { "required": ["lifecycle"] },
+            {
+              "properties": {
+                "package": { "required": ["conffiles"] }
+              },
+              "required": ["package"]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "if": { "properties": { "profile": { "const": "full-stack" } }, "required": ["profile"] },
+      "then": { "required": ["overlay"] }
+    }
+  ]
+}

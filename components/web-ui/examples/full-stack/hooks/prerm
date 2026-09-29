@@ -1,0 +1,4 @@
+#!/bin/sh
+
+# Keep user configuration under standard opkg conffile semantics.
+exit 0

@@ -1,0 +1,56 @@
+# Tor transport integration test — directory mode
+#
+# Topology:
+#   [fips-a] — Tor + FIPS co-located, HiddenServiceDir onion service
+#   [fips-b] — Tor + FIPS co-located, socks5-only, connects to fips-a's .onion
+#
+# Both nodes run Tor and FIPS in the same container. Node A's Tor manages
+# the onion service via HiddenServiceDir. Node B connects outbound through
+# its local Tor's SOCKS5 proxy.
+
+networks:
+  dir-test:
+    driver: bridge
+    labels:
+      - "com.corganlabs.fips-ci=1"
+
+services:
+  fips-a:
+    image: ${FIPS_TEST_IMAGE:-fips-test:latest}
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=0
+    restart: "no"
+    container_name: fips-dir-a${FIPS_CI_NAME_SUFFIX:-}
+    hostname: fips-dir-a
+    volumes:
+      - ./configs/node-a.yaml:/etc/fips/fips.yaml:ro
+      - ./torrc:/etc/tor/torrc:ro
+    environment:
+      - RUST_LOG=info,fips::transport::tor=debug
+      - FIPS_TEST_MODE=tor-directory
+    networks:
+      dir-test:
+
+  fips-b:
+    image: ${FIPS_TEST_IMAGE:-fips-test:latest}
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=0
+    restart: "no"
+    container_name: fips-dir-b${FIPS_CI_NAME_SUFFIX:-}
+    hostname: fips-dir-b
+    volumes:
+      - ./configs/node-b.yaml:/etc/fips/fips.yaml:ro
+      - ./torrc.socks5:/etc/tor/torrc:ro
+    environment:
+      - RUST_LOG=info,fips::transport::tor=debug
+      - FIPS_TEST_MODE=tor-directory
+    networks:
+      dir-test:

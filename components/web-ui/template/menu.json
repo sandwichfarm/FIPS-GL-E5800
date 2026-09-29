@@ -1,0 +1,9 @@
+{
+  "index": 80,
+  "view": "__PLUGIN_ID__",
+  "title": {
+    "translate": "__I18N_KEY__.title"
+  },
+  "icon": "setting",
+  "level": 1
+}

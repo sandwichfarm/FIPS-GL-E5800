@@ -1,0 +1,43 @@
+- name: Report check-mode plan without uploading or installing
+  ansible.builtin.debug:
+    msg: "Would verify/reinstall missing package for {{ stack_component }}; maintainer scripts can change services, DNS and firewall."
+  when: ansible_check_mode
+
+- name: Install using SSH shell transport
+  when: not ansible_check_mode
+  block:
+    - name: Allocate controller staging directory
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: e5800-package-
+      delegate_to: localhost
+      register: package_stage
+
+    - name: Render verified installer on controller
+      ansible.builtin.command:
+        argv:
+          - "{{ controller_python }}"
+          - "{{ playbook_dir }}/../tools/ipk.py"
+          - "{{ package_artifacts[stack_component].path }}"
+          - --sha256
+          - "{{ package_artifacts[stack_component].sha256 }}"
+          - --component
+          - "{{ stack_component }}"
+          - --render
+          - "{{ package_stage.path }}/install.sh"
+      delegate_to: localhost
+      changed_when: false
+
+    - name: Restore package only when its installed version differs or it is absent
+      ansible.builtin.script:
+        cmd: "{{ package_stage.path }}/install.sh"
+        executable: /bin/sh
+      register: package_install
+      changed_when: "'STACK_CHANGED' in package_install.stdout"
+  always:
+    - name: Remove controller staging directory
+      ansible.builtin.file:
+        path: "{{ package_stage.path }}"
+        state: absent
+      delegate_to: localhost
+      when: package_stage is defined and package_stage.path is defined

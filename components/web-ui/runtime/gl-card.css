@@ -1,0 +1,31 @@
+/*
+ * Opt-in layout contract for the firmware-provided <gl-card> component.
+ *
+ * Firmware 4.8.x renders the public component as .gl-card-wrapper with a
+ * direct .container body. Keep that firmware detail here so plugins can use
+ * stable SDK classes instead of scoped deep selectors.
+ */
+.gl-sdk4-card,
+.gl-sdk4-card > .container {
+  box-sizing: border-box;
+  min-width: 0;
+}
+
+.gl-sdk4-card > .container {
+  width: 100%;
+}
+
+.gl-sdk4-card--fill {
+  height: 100%;
+}
+
+.gl-sdk4-card--fill > .container {
+  display: flex;
+  height: 100%;
+  flex-direction: column;
+}
+
+.gl-sdk4-card__grow {
+  min-height: 0;
+  flex: 1 1 auto;
+}
