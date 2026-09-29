@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+# A removed or upgraded dashboard must leave the physical display usable.
+if [ -x /etc/init.d/citydash ] && /etc/init.d/citydash enabled 2>/dev/null; then
+    /root/dashboard/toggle.sh off
+fi
+exit 0

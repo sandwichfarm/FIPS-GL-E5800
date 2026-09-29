@@ -1,0 +1,157 @@
+- name: Transactional FIPS stack deployment with router-local rollback
+  hosts: routers
+  gather_facts: false
+  serial: 1
+  vars_files:
+    - vars/defaults.yml
+  pre_tasks:
+    - name: Prevent check-only fixtures from authorizing deployment
+      ansible.builtin.assert:
+        that: ansible_check_mode
+      when: check_only_fixture | default(false) | bool
+
+  roles:
+    - preflight
+
+  tasks:
+    - name: Require reviewed components, firmware and a unique transaction
+      ansible.builtin.assert:
+        that:
+          - restore_components | length > 0
+          - restore_components | difference(['fips', 'web_ui', 'device_ui']) | length == 0
+          - router_profile in approved_profiles
+          - recovery_transaction is defined
+          - recovery_transaction is match('^[A-Za-z0-9_-]+$')
+          - recovery_seconds | int >= 60
+          - recovery_seconds | int <= 900
+          - recovery_probe_ip is defined
+          - recovery_probe_ip is match('^[0-9.]+$')
+          - recovery_probe_name is defined
+          - recovery_probe_name is match('^[A-Za-z0-9.-]+$')
+          - known_good_artifacts.keys() | list | difference(['fips', 'web_ui', 'device_ui']) | length == 0
+        fail_msg: Supply reviewed firmware, selected artifacts, unique rollback transaction, and reachable network probes.
+
+    - name: Validate every selected candidate before router writes
+      ansible.builtin.include_role:
+        name: package_validate
+      loop: "{{ restore_components }}"
+      loop_control:
+        loop_var: stack_component
+
+    - name: Validate all supplied known-good IPKs before router writes
+      ansible.builtin.command:
+        argv:
+          - "{{ controller_python }}"
+          - "{{ playbook_dir }}/../tools/ipk.py"
+          - "{{ item.value.path }}"
+          - --sha256
+          - "{{ item.value.sha256 }}"
+          - --component
+          - "{{ item.key }}"
+      loop: "{{ known_good_artifacts | dict2items }}"
+      delegate_to: localhost
+      check_mode: false
+      changed_when: false
+
+    - name: Check package and hardware prerequisites
+      ansible.builtin.include_role:
+        name: prerequisites
+
+    - name: Show dry-run transaction plan
+      ansible.builtin.debug:
+        msg: "Would install {{ restore_components | join(', ') }} with rollback transaction {{ recovery_transaction }}; no router writes in check mode."
+      when: ansible_check_mode
+
+    - name: Install with a router-local rollback guard
+      when: not ansible_check_mode
+      block:
+        - name: Install and start boot-persistent recovery guard
+          ansible.builtin.raw: |
+            set -eu
+            test ! -e /etc/fips-recovery/pending
+            umask 077
+            mkdir -p /etc/fips-recovery
+            chmod 0700 /etc/fips-recovery
+            decode() { if command -v base64 >/dev/null 2>&1; then base64 -d; else openssl base64 -d; fi; }
+            decode > /etc/fips-recovery/guard.sh.tmp <<'FIPS_GUARD_PAYLOAD'
+            {{ lookup('file', playbook_dir + '/../packaging/recovery/guard.sh') | b64encode }}
+            FIPS_GUARD_PAYLOAD
+            mv /etc/fips-recovery/guard.sh.tmp /etc/fips-recovery/guard.sh
+            chmod 0700 /etc/fips-recovery/guard.sh
+            decode > /etc/init.d/fips-recovery.tmp <<'FIPS_INIT_PAYLOAD'
+            {{ lookup('file', playbook_dir + '/../packaging/recovery/fips-recovery.init') | b64encode }}
+            FIPS_INIT_PAYLOAD
+            mv /etc/init.d/fips-recovery.tmp /etc/init.d/fips-recovery
+            chmod 0755 /etc/init.d/fips-recovery
+            /etc/init.d/fips-recovery enable
+            /etc/init.d/fips-recovery restart
+            /etc/init.d/fips-recovery status
+          changed_when: true
+
+        - name: Stage exact prior packages for every currently installed component
+          ansible.builtin.include_tasks: stage_previous.yml
+          loop: "{{ known_good_artifacts | dict2items }}"
+          loop_control:
+            loop_var: prior_component
+
+        - name: Arm local deadline before any candidate package installation
+          ansible.builtin.raw: >-
+            /bin/sh /etc/fips-recovery/guard.sh arm
+            {{ recovery_transaction | quote }} {{ recovery_seconds | int }}
+          register: recovery_arm
+          changed_when: "'ARMED ' in recovery_arm.stdout"
+
+        - name: Install selected packages within the rollback window
+          ansible.builtin.include_role:
+            name: package_restore
+          loop: "{{ restore_components }}"
+          loop_control:
+            loop_var: stack_component
+
+        - name: Check management, ordinary networking and package runtime
+          ansible.builtin.raw: |
+            set -eu
+            ubus call system board >/dev/null
+            ip -4 route get {{ recovery_probe_ip | quote }} >/dev/null
+            ping -c 1 -W 3 {{ recovery_probe_ip | quote }} >/dev/null
+            nslookup {{ recovery_probe_name | quote }} >/dev/null
+            {% if 'fips' in restore_components %}
+            test -x /usr/bin/fips
+            test -x /usr/bin/fips-router-admin
+            test -x /etc/init.d/fips
+            if [ -f /etc/fips/router/settings.json ] &&
+               [ "$(jsonfilter -i /etc/fips/router/settings.json -e '@.enabled')" = true ]; then
+                /etc/init.d/fips status >/dev/null
+                test -S /run/fips/control.sock
+                printf '{"operation":"diagnostics"}\n' | /usr/bin/fips-router-admin | jsonfilter -e '@.data.daemon_reachable' | grep -qx true
+                printf '{"operation":"status"}\n' | /usr/bin/fips-router-admin | jsonfilter -e '@.data.persistent' | grep -qx true
+            fi
+            {% endif %}
+            {% if 'web_ui' in restore_components %}
+            test -s /www/views/gl-sdk4-ui-fips.common.js.gz
+            test -x /www/cgi-bin/gl-sdk4-ui-fips
+            {% endif %}
+            {% if 'device_ui' in restore_components %}
+            python3 -c 'import PIL.Image, numpy'
+            test -s /root/dashboard/dashboard.py
+            {% endif %}
+            echo FIPS_HEALTHY
+          register: deployment_health
+          changed_when: false
+          failed_when: "'FIPS_HEALTHY' not in deployment_health.stdout"
+
+        - name: Confirm transaction only after health checks succeed
+          ansible.builtin.raw: >-
+            /bin/sh /etc/fips-recovery/guard.sh confirm {{ recovery_transaction | quote }}
+          register: recovery_confirm
+          changed_when: "'CONFIRMED ' in recovery_confirm.stdout"
+
+      rescue:
+        - name: Roll back immediately after a failed local deployment step
+          ansible.builtin.raw: /bin/sh /etc/fips-recovery/guard.sh rollback
+          when: recovery_arm is defined and 'ARMED ' in recovery_arm.stdout | default('')
+          ignore_errors: true
+
+        - name: Report failed deployment and autonomous rollback status
+          ansible.builtin.fail:
+            msg: Deployment failed. Check /etc/fips-recovery/{{ recovery_transaction }}/result on the router; its watchdog rolls back after the deadline or reboot if SSH was lost.

@@ -1,0 +1,16 @@
+#!/bin/sh
+# FIPS's upstream build.rs asks Git for a revision. This is a vendored source
+# snapshot, so the monorepo HEAD would misidentify the binary and vary with
+# unrelated work. Report the pinned upstream commit inside its build directory.
+if [ "${PWD:-}" = /workspace/components/fips ]; then
+    case "$*" in
+        'rev-parse --short=10 HEAD')
+            python3 -c 'import json; p="/workspace/upstream/sources.json"; s=json.load(open(p)); print(next(x["commit"][:10] for x in s["sources"] if x["path"]=="components/fips"))'
+            exit 0
+            ;;
+        'status --porcelain')
+            exit 0
+            ;;
+    esac
+fi
+exec /usr/bin/git "$@"

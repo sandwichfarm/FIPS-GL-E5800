@@ -1,0 +1,16 @@
+[package]
+name = "fips-router-admin"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+fips = { path = "../../components/fips" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+sha2 = "0.11"
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3.15"

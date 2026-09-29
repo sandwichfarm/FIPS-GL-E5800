@@ -5,6 +5,11 @@
   vars_files:
     - vars/defaults.yml
   pre_tasks:
+    - name: Require the transactional deploy playbook for any router write
+      ansible.builtin.assert:
+        that: ansible_check_mode
+        fail_msg: Use deploy.yml for installation; restore.yml is check-only.
+
     - name: Prevent a check-only fixture from authorizing installation
       ansible.builtin.assert:
         that: ansible_check_mode

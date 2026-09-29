@@ -1,0 +1,48 @@
+name: GL-E5800 manual deployment
+
+on:
+  workflow_dispatch:
+    inputs:
+      transaction:
+        description: Unique rollback transaction ID approved for this deployment
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, linux, gl-e5800-controller]
+    environment: hardware
+    timeout-minutes: 90
+    concurrency:
+      group: gl-e5800-hardware
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Check the reviewed local deployment profile exists
+        run: test -r /etc/gl-e5800/deploy.yml
+      - name: Reject tracked private state and obvious secrets
+        run: python3 tools/secret_scan.py
+      - name: Build and test candidate stack on the controller
+        run: |
+          make dev-image web-deps web-build web-test check
+          make lab-build lab-up lab-test
+          make lab-down
+          make openwrt-build package-fips package-web package-device
+          python3 tools/verify_artifacts.py
+      - name: Stop lab after a failed test
+        if: failure()
+        run: make lab-down
+      - name: Verify the local profile and artifacts match this build
+        run: python3 tools/check_deploy_profile.py /etc/gl-e5800/deploy.yml
+      - name: Deploy with autonomous router rollback
+        env:
+          RECOVERY_TX: ${{ inputs.transaction }}
+        run: |
+          case "$RECOVERY_TX" in ''|*[!A-Za-z0-9_-]*) echo 'Invalid transaction ID' >&2; exit 2;; esac
+          ansible-playbook ansible/deploy.yml -e @/etc/gl-e5800/deploy.yml -e "recovery_transaction=$RECOVERY_TX"

@@ -3,3 +3,5 @@ restore_components: []
 approved_profiles: []
 package_artifacts: {}
 controller_python: python3
+known_good_artifacts: {}
+recovery_seconds: 300

@@ -1,0 +1,7 @@
+.git
+.cache
+private
+artifacts
+**/node_modules
+**/target
+**/__pycache__

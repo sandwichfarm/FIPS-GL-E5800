@@ -1,0 +1,48 @@
+name: GL-E5800 local stack CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test-package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Reject tracked private state and obvious secrets
+        run: python3 tools/secret_scan.py
+      - name: Install Ansible for syntax checks
+        run: sudo apt-get update && sudo apt-get install -y ansible
+      - name: Build pinned Rust and Zig environment
+        run: make dev-image
+      - name: Install locked web dependencies and validate UI
+        run: make web-deps web-build web-test
+      - name: Validate Python and Ansible logic
+        run: make check
+      - name: Build and test native multi-node lab
+        run: make lab-build lab-up lab-test
+      - name: Stop lab
+        if: always()
+        run: make lab-down
+      - name: Cross-build all OpenWrt ARM64 binaries
+        run: make openwrt-build
+      - name: Build deterministic candidate packages
+        run: make package-fips package-web package-device
+      - name: Inspect package digests and metadata
+        run: python3 tools/verify_artifacts.py
+      - name: Upload candidate artifacts and provenance
+        uses: actions/upload-artifact@v4
+        with:
+          name: gl-e5800-candidates-${{ github.sha }}
+          path: |
+            artifacts/*.ipk
+            artifacts/*.ipk.json
+          if-no-files-found: error
+          retention-days: 30

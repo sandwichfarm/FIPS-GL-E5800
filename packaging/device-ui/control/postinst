@@ -1,0 +1,4 @@
+#!/bin/sh
+# Installation leaves the stock screen active. The deployment transaction
+# selects the custom screen after health checks and retains a stock fallback.
+exit 0

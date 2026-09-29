@@ -1,0 +1,10 @@
+{
+  "index": 115,
+  "view": "fips",
+  "title": "FIPS",
+  "level": 2,
+  "parent": "applications",
+  "parent_icon": "application",
+  "parent_index": 55,
+  "show_mode": ["router"]
+}

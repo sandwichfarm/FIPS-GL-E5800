@@ -6,6 +6,7 @@
 *.pyc
 **/node_modules/
 **/target/
+apps/web-ui/dist/
 .DS_Store
 /ansible/inventory/local.yml
 /ansible/vars/local.yml

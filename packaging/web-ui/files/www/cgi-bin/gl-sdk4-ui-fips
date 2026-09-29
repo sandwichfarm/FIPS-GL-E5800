@@ -1,0 +1,32 @@
+#!/bin/sh
+# GL-session-authenticated CGI. No request content is evaluated by a shell.
+respond() {
+    printf 'Status: %s\r\nContent-Type: application/json\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n\r\n' "$1"
+    printf '{"status":"error","error":"%s"}\n' "$2"
+    exit 0
+}
+
+[ "${REQUEST_METHOD:-}" = POST ] || respond '405 Method Not Allowed' method_not_allowed
+case "${CONTENT_TYPE:-}" in
+    application/json|application/json\;*) ;;
+    *) respond '415 Unsupported Media Type' json_required ;;
+esac
+case "${CONTENT_LENGTH:-}" in
+    ''|*[!0-9]*) respond '400 Bad Request' invalid_length ;;
+esac
+[ "${#CONTENT_LENGTH}" -le 5 ] || respond '413 Payload Too Large' request_too_large
+[ "$CONTENT_LENGTH" -gt 0 ] && [ "$CONTENT_LENGTH" -le 32768 ] || respond '413 Payload Too Large' request_too_large
+
+# Custom header prevents simple cross-origin form submissions. No CORS allowance.
+sid=${HTTP_X_GL_ADMIN_TOKEN:-}
+[ "${#sid}" -eq 32 ] || respond '401 Unauthorized' unauthorized
+case "$sid" in *[!0-9A-Za-z]*) respond '401 Unauthorized' unauthorized ;; esac
+session=$(ubus call gl-session session "{\"sid\":\"$sid\"}" 2>/dev/null) || respond '401 Unauthorized' unauthorized
+group=$(jsonfilter -q -s "$session" -e '@.aclgroup' 2>/dev/null)
+[ "$group" = root ] || respond '403 Forbidden' forbidden
+unset sid session group HTTP_X_GL_ADMIN_TOKEN HTTP_COOKIE
+
+printf 'Content-Type: application/json\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n\r\n'
+# CGI stdin is CONTENT_LENGTH bytes; the backend independently enforces its limit.
+# timeout also bounds stalled stdin and a slow local daemon. No stderr is exposed.
+timeout 8 /usr/bin/fips-router-admin 2>/dev/null

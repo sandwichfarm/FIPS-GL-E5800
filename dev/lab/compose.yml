@@ -1,0 +1,46 @@
+name: e5800-fips-lab
+
+services:
+  bootstrap:
+    image: e5800-dev:0.2.0
+    volumes:
+      - ../..:/workspace:ro
+      - lab_state:/state
+    command: ["python3", "/workspace/dev/lab/bootstrap.py"]
+
+  node-a:
+    image: e5800-dev:0.2.0
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+    cap_add: [NET_ADMIN]
+    devices: [/dev/net/tun:/dev/net/tun]
+    volumes:
+      - ../..:/workspace:ro
+      - lab_state:/state
+    command: ["/workspace/components/fips/target/release/fips", "--config", "/state/a/fips.yaml"]
+    healthcheck:
+      test: ["CMD", "python3", "/workspace/dev/lab/health.py", "/state/a/control.sock"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  node-b:
+    image: e5800-dev:0.2.0
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+    cap_add: [NET_ADMIN]
+    devices: [/dev/net/tun:/dev/net/tun]
+    volumes:
+      - ../..:/workspace:ro
+      - lab_state:/state
+    command: ["/workspace/components/fips/target/release/fips", "--config", "/state/b/fips.yaml"]
+    healthcheck:
+      test: ["CMD", "python3", "/workspace/dev/lab/health.py", "/state/b/control.sock"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+volumes:
+  lab_state:

@@ -1,0 +1,36 @@
+- name: Allocate controller script for {{ prior_component.key }}
+  ansible.builtin.tempfile:
+    state: file
+    prefix: e5800-prior-
+  delegate_to: localhost
+  register: prior_script
+
+- name: Validate and render exact prior package
+  ansible.builtin.command:
+    argv:
+      - "{{ controller_python }}"
+      - "{{ playbook_dir }}/../tools/stage_previous.py"
+      - "{{ prior_component.value.path }}"
+      - --sha256
+      - "{{ prior_component.value.sha256 }}"
+      - --component
+      - "{{ prior_component.key }}"
+      - --transaction
+      - "{{ recovery_transaction }}"
+      - --render
+      - "{{ prior_script.path }}"
+  delegate_to: localhost
+  changed_when: false
+
+- name: Transfer verified prior package to protected router storage
+  ansible.builtin.script:
+    cmd: "{{ prior_script.path }}"
+    executable: /bin/sh
+  register: prior_transfer
+  changed_when: "'STAGED ' in prior_transfer.stdout"
+
+- name: Remove controller staging script
+  ansible.builtin.file:
+    path: "{{ prior_script.path }}"
+    state: absent
+  delegate_to: localhost

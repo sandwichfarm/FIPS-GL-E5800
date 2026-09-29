@@ -11,7 +11,11 @@ GL.iNet 4.8.3 to 4.10.0 (OpenWrt 23.05.4, aarch64_cortex-a53).
 | `components/fips/` | Complete upstream FIPS v0.5.2 source snapshot |
 | `components/web-ui/` | Community gl-sdk4-plugin-kit source; foundation for a new FIPS web panel |
 | `components/device-ui/` | Community GL-E5800 dashboard source; foundation for a FIPS screen |
-| `ansible/` | Read-only inspection plus three package recovery roles |
+| `apps/router-admin/` | FIPS management backend shared by both interfaces |
+| `apps/web-ui/` | Native GL.iNet FIPS web view |
+| `dev/lab/` | Two-node Linux integration environment and screen preview |
+| `packaging/` | Independently built package payloads and touchscreen integration |
+| `ansible/` | Read-only inspection and guarded deployment roles |
 | `tools/capture.py` | SSH capture of stock UI assets from `/rom` |
 | `tools/ipk.py` | Pinned IPK validation and Python-free remote installer generation |
 | `upstream/sources.json` | Source URLs, exact imported commits and licenses |
@@ -36,23 +40,32 @@ decompressed JavaScript is still compiled code, not recovered original source.
 ## Status
 
 - Source imports and pre/post-upgrade firmware captures are complete.
-- FIPS release IPK is downloaded and checksum-checked; community dashboard IPK is built locally.
-- Ansible inspection and package restoration infrastructure is prepared.
+- The management backend validates and stages configuration. It reads a live FIPS
+  control socket and excludes private identity data from responses.
+- The web view and touchscreen FIPS panel build locally. The touchscreen package
+  still needs a compatible Pillow dependency package before device installation.
+- Two real Linux FIPS nodes connected in containers; IPv6 mesh ping and identity
+  preservation after an abrupt process crash passed locally.
+- All ARM64 binaries and three deterministic candidate packages build locally.
+  Router-local rollback passes fake-opkg fault tests. CI/CD and guarded Ansible
+  deployment are authored, with hosted and hardware verification still pending.
+- Configuration activation, isolated gateway/firewall behavior, touchscreen
+  Pillow packaging, and a complete offline recovery kit remain in progress.
 - No package or configuration has been installed on the router by this project.
-- FIPS-specific web and touchscreen screens have **not** been implemented.
-- 4.10.0 has been observed; neither community UI nor FIPS has been runtime-tested on it.
-- No recovery profile is approved for installation by default.
+- 4.10.0 has been observed; neither community UI nor FIPS has been runtime-tested
+  on the GL-E5800. No recovery profile is approved for installation by default.
 
 Read [recovery instructions](docs/recovery.md) before using the playbooks and
 [firmware observations](docs/firmware.md) for the source availability findings.
+See [local development](docs/local-development.md) for build, lab, preview, and
+package commands. [Implementation tracker](docs/IMPLEMENTATION.md) lists the
+remaining acceptance gates.
 
 ## Local checks
 
 ```sh
-python3 -m unittest discover -s tests -v
-cd ansible
-ansible-playbook inspect.yml --syntax-check
-ansible-playbook restore.yml --syntax-check
+make check
+python3 tools/secret_scan.py
 ```
 
 Read-only router inspection (SSH key or prompted password):

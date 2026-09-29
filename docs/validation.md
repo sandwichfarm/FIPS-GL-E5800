@@ -24,3 +24,15 @@ Not validated: actual package installation/removal, FIPS traffic, browser render
 of a FIPS extension, touchscreen behavior, dependency conflict resolution, service
 activation, or a future firmware-upgrade/recovery cycle. Those require a separately
 requested deployment/testing pass. Firmware tuples remain unapproved by default.
+
+## Subsequent local development
+
+The preparation record above describes the original imported packages. Current
+candidate packages are built by `tools/package.py` and verified by
+`tools/verify_artifacts.py`; their digests differ from the imported FIPS release
+and initial dashboard build. Twenty-two Python tests and Ansible syntax checks
+pass. A two-container Linux FIPS mesh connected and passed IPv6 ping after a
+forced node restart while keeping the same identity. Fake-opkg tests exercise
+the new local rollback guard under timeout, reboot, checksum failure and explicit
+confirmation. Neither CI nor the guarded deployment has been run against the
+router, and firmware/UI compatibility remains unapproved.
