@@ -41,7 +41,7 @@ REQUIRED_KIT_FILES = {
     "ansible/roles/web_ui/tasks/main.yml",
     "packaging/recovery/guard.sh", "packaging/recovery/health.sh",
     "packaging/recovery/apply-initial.sh", "packaging/recovery/cleanup-stock.sh",
-    "packaging/recovery/cleanup-upgrade.sh",
+    "packaging/recovery/cleanup-bootstrap.sh", "packaging/recovery/cleanup-upgrade.sh",
     "packaging/recovery/fips-recovery.init",
     "packaging/device-ui/control/postinst", "packaging/device-ui/control/prerm",
     "tools/ipk.py", "tools/build_provenance.py", "tools/vendor_pillow.py", "tools/offline_runtime.py",

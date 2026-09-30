@@ -44,6 +44,29 @@ matching firmware fingerprint are not approval or hardware verification.
    persistent router write. It refuses an existing backup filename, so each
    transaction must use a new ID. A successful archive check is still not a
    restore rehearsal.
+   On a first installation, guard upload, service start and deadline arming run
+   in one SSH command. Its exit/HUP/TERM trap removes the new guard if the
+   command fails before arming; after arming, the router-local watchdog owns
+   rollback. A local signal-injection test covers that handoff. A power loss
+   or untrappable process kill during the pre-arm interval can still leave
+   partial guard files, though no candidate package or network change has
+   begun. Inspect and clean that state before retrying; it is not a completed
+   rollback. Once SSH returns, the kit's `cleanup-bootstrap.sh` refuses a
+   pending transaction, candidate packages, a stopped stock screen, unknown
+   recovery files, or a watchdog that cannot stop. After reviewing the private
+   baseline and confirming the guard never armed, run:
+
+   ```sh
+   ssh -o BatchMode=yes -o IdentitiesOnly=yes -i private/ssh/gl-e5800_ed25519 \
+     root@192.168.8.1 '/bin/sh -s -- reviewed_trial_id' \
+     < packaging/recovery/cleanup-bootstrap.sh
+   ```
+
+   Capture a new encrypted backup and inventory with the commands below and
+   compare both against the pretrial baseline before calling the stock state
+   restored. If SSH does not return, this pre-arm case has no autonomous guard;
+   use the model-specific recovery ladder below. A firmware power loss in this
+   interval has not been tested on hardware.
 2. Run `make check`, `make lab-build lab-up lab-test`, `make openwrt-build`,
    `make package-fips package-web package-device vendor-deps`, and
    `python3 tools/verify_artifacts.py`, and

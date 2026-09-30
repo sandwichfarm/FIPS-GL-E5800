@@ -387,3 +387,17 @@ Python tests, shell checks and Ansible syntax checks. A new private offline kit
 `guard_upgrade_watchdog_20260930` passes verification. These are local fixtures
 and archive checks. A real GL-E5800 upgrade, watchdog restart, rollback and
 same-state comparison remain untested, and guards without layout 2 are blocked.
+
+First-install guard setup and arming now happen in one remote command. The
+command traps exit, HUP and TERM before its first persistent write; if arming
+has not completed, it removes its new guard and boot service. The rendered
+Ansible command passed a local HUP-injection test before arming and a separate
+successful arming test: the former returned to stock files, while the latter
+retained a pending local guard. A standalone `cleanup-bootstrap.sh` handles an
+untrappable pre-arm interruption after SSH returns; isolated tests reject pending transactions,
+candidate packages, unknown recovery files and a watchdog that cannot stop.
+The preflight also rejects stale guard boot links or lock directories; cleanup
+refuses a lock owned by a live guard operation. `make check` passes 149 Python
+tests plus shell and Ansible syntax checks. The private
+`atomic_bootstrap_ready_20260930` offline kit verifies. A real power cut in
+that narrow interval and the physical cleanup path are untested.

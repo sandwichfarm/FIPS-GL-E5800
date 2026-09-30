@@ -14,7 +14,7 @@ export ANSIBLE_LOCAL_TEMP
 check:
 	python3 tools/check_sources.py
 	python3 -m unittest discover -s tests -v
-	for file in packaging/recovery/guard.sh packaging/recovery/health.sh packaging/recovery/apply-initial.sh packaging/recovery/cleanup-stock.sh packaging/recovery/cleanup-upgrade.sh packaging/fips/files/etc/init.d/fips packaging/fips/files/etc/init.d/fips-gateway packaging/web-ui/files/www/cgi-bin/gl-sdk4-ui-fips; do sh -n "$$file"; done
+	for file in packaging/recovery/guard.sh packaging/recovery/health.sh packaging/recovery/apply-initial.sh packaging/recovery/cleanup-stock.sh packaging/recovery/cleanup-bootstrap.sh packaging/recovery/cleanup-upgrade.sh packaging/fips/files/etc/init.d/fips packaging/fips/files/etc/init.d/fips-gateway packaging/web-ui/files/www/cgi-bin/gl-sdk4-ui-fips; do sh -n "$$file"; done
 	cd ansible && ansible-playbook inspect.yml --syntax-check
 	cd ansible && ansible-playbook inspect-dependencies.yml --syntax-check
 	cd ansible && ansible-playbook restore.yml --syntax-check

@@ -187,6 +187,11 @@
           test ! -L /etc/fips-recovery
           test ! -e /etc/init.d/fips-recovery
           test ! -L /etc/init.d/fips-recovery
+          test ! -e /tmp/fips-recovery
+          test ! -L /tmp/fips-recovery
+          for link in /etc/rc.d/*fips-recovery; do
+            test ! -e "$link" && test ! -L "$link"
+          done
           for package in fips gl-sdk4-ui-fips gl-e5800-dashboard; do
             if opkg status "$package" 2>/dev/null | grep -q '^Package:'; then
               echo "An installed FIPS component has no rollback guard: $package" >&2
@@ -202,6 +207,12 @@
     - name: Record guard installation path
       ansible.builtin.set_fact:
         existing_recovery_guard: "{{ 'GUARDED_UPGRADE' in guard_install_state.stdout }}"
+
+    - name: Refuse known-good IPKs on an unguarded first installation
+      ansible.builtin.assert:
+        that: known_good_artifacts | length == 0
+        fail_msg: A first installation has no prior FIPS package to stage.
+      when: not existing_recovery_guard
 
     - name: Require a private off-router backup destination before router writes
       ansible.builtin.assert:
@@ -301,6 +312,37 @@
             test "$pending_id" = {{ recovery_transaction | quote }}
             {% else %}
             test ! -e /etc/fips-recovery/pending
+            bootstrap_cleanup() {
+              trap - 0 1 2 3 15
+              attempts=0
+              while [ -L /tmp/fips-recovery/guard.lock ]; do
+                holder=$(readlink /tmp/fips-recovery/guard.lock) || return 1
+                case "$holder" in ''|*[!0-9]*) return 1;; esac
+                kill -0 "$holder" 2>/dev/null || break
+                [ "$attempts" -lt 10 ] || return 1
+                sleep 1
+                attempts=$((attempts + 1))
+              done
+              if [ -e /etc/fips-recovery/pending ] || [ -L /etc/fips-recovery/pending ]; then
+                return 0
+              fi
+              installed=$(opkg list-installed) || return 1
+              for package in fips gl-sdk4-ui-fips gl-e5800-dashboard; do
+                if printf '%s\n' "$installed" | grep -q "^$package - "; then return 1; fi
+              done
+              if [ -x /etc/init.d/fips-recovery ]; then
+                /etc/init.d/fips-recovery disable || true
+                /etc/init.d/fips-recovery stop || true
+              fi
+              for link in /etc/rc.d/*fips-recovery; do
+                if [ -e "$link" ] || [ -L "$link" ]; then rm -f "$link"; fi
+              done
+              rm -f /etc/init.d/fips-recovery /etc/init.d/fips-recovery.tmp
+              rm -rf /etc/fips-recovery /tmp/fips-recovery
+              sync
+            }
+            trap 'bootstrap_cleanup' 0
+            trap 'exit 1' 1 2 3 15
             {% endif %}
             umask 077
             mkdir -p /etc/fips-recovery
@@ -352,22 +394,20 @@
             /etc/init.d/fips-recovery enabled
             {% endif %}
             /etc/init.d/fips-recovery status
-          changed_when: true
-
-        - name: Stage exact prior packages for a first installation
-          ansible.builtin.include_tasks: stage_previous.yml
-          loop: "{{ known_good_artifacts | dict2items }}"
-          loop_control:
-            loop_var: prior_component
-          when: not existing_recovery_guard
-
-        - name: Arm new local guard before any candidate package installation
-          ansible.builtin.raw: >-
-            /bin/sh /etc/fips-recovery/guard.sh arm
+            {% if not existing_recovery_guard %}
+            mkdir -p /etc/fips-recovery/{{ recovery_transaction }}/previous
+            chmod 0700 /etc/fips-recovery/{{ recovery_transaction }} \
+              /etc/fips-recovery/{{ recovery_transaction }}/previous
+            /bin/sh /etc/fips-recovery/guard.sh arm \
             {{ recovery_transaction | quote }} {{ recovery_seconds | int }}
-          register: recovery_arm
-          changed_when: "'ARMED ' in recovery_arm.stdout"
-          when: not existing_recovery_guard
+            arm_status=$(/bin/sh /etc/fips-recovery/guard.sh status)
+            set -- $arm_status
+            test "$1" = PENDING
+            test "$2" = {{ recovery_transaction | quote }}
+            trap - 0 1 2 3 15
+            {% endif %}
+          register: recovery_guard_install
+          changed_when: true
 
         - name: Install pinned offline dashboard runtime inside the rollback window
           ansible.builtin.include_role:
@@ -476,32 +516,17 @@
             {% else %}
             exit 1
             {% endif %}
-          when: >-
-            (prior_recovery_arm is defined and 'ARMED ' in prior_recovery_arm.stdout | default('')) or
-            (recovery_arm is defined and 'ARMED ' in recovery_arm.stdout | default(''))
           ignore_errors: true
 
         - name: Remove incomplete first-install guard before any package change
-          ansible.builtin.raw: |
-            set -eu
-            test ! -e /etc/fips-recovery/pending
-            for package in fips gl-sdk4-ui-fips gl-e5800-dashboard; do
-              ! opkg status "$package" 2>/dev/null | grep -q '^Package:'
-            done
-            if [ -x /etc/init.d/fips-recovery ]; then
-              /etc/init.d/fips-recovery disable || true
-              /etc/init.d/fips-recovery stop || true
-            fi
-            for link in /etc/rc.d/*fips-recovery; do
-              if [ -e "$link" ] || [ -L "$link" ]; then rm -f "$link"; fi
-            done
-            rm -f /etc/init.d/fips-recovery /etc/init.d/fips-recovery.tmp
-            rm -rf /etc/fips-recovery /tmp/fips-recovery
-            sync
-            echo FIRST_INSTALL_BOOTSTRAP_CLEAN
+          ansible.builtin.script:
+            cmd: "{{ playbook_dir }}/../packaging/recovery/cleanup-bootstrap.sh {{ recovery_transaction }}"
+            executable: /bin/sh
+          register: bootstrap_cleanup
+          changed_when: "'BOOTSTRAP_CLEAN' in bootstrap_cleanup.stdout"
           when:
             - not existing_recovery_guard
-            - recovery_arm is not defined or 'ARMED ' not in recovery_arm.stdout | default('')
+            - recovery_guard_install is not defined or 'ARMED ' not in recovery_guard_install.stdout | default('')
           ignore_errors: true
 
         - name: Remove prior-package staging after an unarmed upgrade failure

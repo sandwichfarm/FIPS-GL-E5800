@@ -36,6 +36,7 @@ COPIES = (
     "packaging/recovery/health.sh",
     "packaging/recovery/apply-initial.sh",
     "packaging/recovery/cleanup-stock.sh",
+    "packaging/recovery/cleanup-bootstrap.sh",
     "packaging/recovery/cleanup-upgrade.sh",
     "packaging/recovery/fips-recovery.init",
     "packaging/device-ui/control/postinst",
