@@ -114,10 +114,44 @@ The encrypted-backup comparison checks every captured UCI/FIPS/dashboard file's
 contents, mode, owner and modification time without printing contents. Use
 `--ignore-mtime` only after reviewing a timestamp-only difference; it still
 checks contents, mode and ownership. The inventory comparison checks firmware,
-all opkg package versions/statuses, and selected service enable/running states.
+all opkg package versions/statuses, selected service enable/running states,
+and the stock web bundle and touchscreen binary fingerprints.
 It will report the newly installed `fips-recovery` guard after a first-install
-rollback; that persistent footprint is an open same-state gap, not an allowed
-silent exception. Neither comparison proves LAN-client internet/VPN behavior,
+rollback. For that stock baseline only, run the read-only cleanup preflight:
+
+```sh
+python3 tools/finalize_stock_rollback.py \
+  --ssh-key private/ssh/gl-e5800_ed25519 \
+  --before-backup "private/predeploy/backups/$TRIAL-before.age" \
+  --after-backup "private/predeploy/backups/$TRIAL-after.age" \
+  --before-inventory "private/predeploy/inventory/$TRIAL-before.json" \
+  --identity private/predeploy/age-identity.txt --transaction "$TRIAL"
+```
+
+Only after the approved trial has actually rolled back, the preflight reports
+`STOCK_CLEANUP_READY`, and the timestamp/physical/network checks are reviewed,
+run the cleanup and final comparison:
+
+```sh
+python3 tools/finalize_stock_rollback.py \
+  --ssh-key private/ssh/gl-e5800_ed25519 \
+  --before-backup "private/predeploy/backups/$TRIAL-before.age" \
+  --after-backup "private/predeploy/backups/$TRIAL-after.age" \
+  --before-inventory "private/predeploy/inventory/$TRIAL-before.json" \
+  --identity private/predeploy/age-identity.txt --transaction "$TRIAL" \
+  --apply \
+  --recipient "$(age-keygen -y private/predeploy/age-identity.txt)" \
+  --evidence-output "private/predeploy/backups/$TRIAL-guard.age" \
+  --final-backup "private/predeploy/backups/$TRIAL-final.age" \
+  --final-inventory "private/predeploy/inventory/$TRIAL-final.json"
+```
+
+The tool encrypts and verifies the guard's transaction evidence
+before disabling it, removes the first-install guard, then captures and
+compares the final stock state. `--ignore-mtime` may be added only after
+reviewing timestamp-only drift. It refuses to clean an upgrade baseline with
+preexisting FIPS components. This path is locally tested, not yet run on the
+GL-E5800. Neither comparison proves LAN-client internet/VPN behavior,
 web rendering or the physical display; verify those separately before
 confirmation. Keep both captures and inventories out of Git.
 

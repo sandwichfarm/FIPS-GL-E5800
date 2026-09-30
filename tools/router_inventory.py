@@ -29,6 +29,7 @@ for name in dropbear network firewall dnsmasq uhttpd gl_screen citydash homebutt
 done
 """
 PACKAGE_NAME = re.compile(r"[A-Za-z0-9_.+-]+\Z")
+SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 
 
 def parse_packages(output: str) -> dict[str, list[str]]:
@@ -69,17 +70,39 @@ def parse_services(output: str) -> dict[str, list[str]]:
     return services
 
 
-def capture(host: str, ssh_key: Path) -> dict:
+def parse_stock_files(output: str) -> dict[str, list[str]]:
+    lines = output.splitlines()
+    if len(lines) != 2:
+        raise ValueError("Router did not return both stock UI fingerprints")
+    fingerprints = {}
+    for label, line in zip(("web_app", "touchscreen"), lines):
+        parts = line.split(maxsplit=1)
+        if len(parts) != 2 or not SHA256.fullmatch(parts[0]):
+            raise ValueError("Router returned an invalid stock UI fingerprint")
+        path = parts[1].strip()
+        if label == "web_app" and not re.fullmatch(r"/www/js/app\.[A-Za-z0-9_-]+\.js\.gz", path):
+            raise ValueError("Router returned an unexpected stock web path")
+        if label == "touchscreen" and path != "/usr/bin/gl_screen":
+            raise ValueError("Router returned an unexpected stock screen path")
+        fingerprints[label] = [path, parts[0]]
+    return fingerprints
+
+
+def ssh_command(host: str, ssh_key: Path) -> list[str]:
     if not re.fullmatch(r"[A-Za-z0-9_.@:-]+", host) or host.startswith("-"):
         raise ValueError("Invalid SSH host")
     if ssh_key.is_symlink() or not ssh_key.is_file() or stat.S_IMODE(ssh_key.stat().st_mode) & 0o077:
         raise ValueError("SSH identity must be a private regular file")
-    ssh = [
+    return [
         "ssh", "-T", "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes",
         "-o", "PreferredAuthentications=publickey", "-o", "PasswordAuthentication=no",
         "-o", "StrictHostKeyChecking=yes", "-o", "ConnectTimeout=8",
         "-o", "ControlPath=none", "-i", str(ssh_key), host,
     ]
+
+
+def capture(host: str, ssh_key: Path) -> dict:
+    ssh = ssh_command(host, ssh_key)
 
     def run(command: str) -> str:
         result = subprocess.run([*ssh, command], text=True, stdout=subprocess.PIPE,
@@ -92,14 +115,18 @@ def capture(host: str, ssh_key: Path) -> dict:
     if not re.fullmatch(r"[A-Za-z0-9_.+-]+", firmware):
         raise ValueError("Router returned invalid firmware version")
     return {
-        "format": 1,
+        "format": 2,
         "firmware": firmware,
         "packages": parse_packages(run("opkg status")),
         "services": parse_services(run(SERVICE_SCRIPT)),
+        "stock_files": parse_stock_files(run(
+            'set -eu; set -- /www/js/app.*.js.gz; test "$#" = 1; '
+            'sha256sum "$1" /usr/bin/gl_screen'
+        )),
     }
 
 
-def write_private(path: Path, inventory: dict) -> None:
+def prepare_private_output(path: Path) -> None:
     if path.exists() or path.is_symlink() or path.suffix != ".json":
         raise ValueError("Choose a new JSON inventory path")
     resolved = path.resolve()
@@ -107,6 +134,10 @@ def write_private(path: Path, inventory: dict) -> None:
         raise ValueError("Repository inventories must stay in ignored private/")
     if not path.parent.is_dir() or path.parent.is_symlink() or stat.S_IMODE(path.parent.stat().st_mode) & 0o077:
         raise ValueError("Inventory directory must exist with mode 0700")
+
+
+def write_private(path: Path, inventory: dict) -> None:
+    prepare_private_output(path)
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
         with os.fdopen(descriptor, "w") as destination:
@@ -120,12 +151,13 @@ def write_private(path: Path, inventory: dict) -> None:
 
 
 def compare(before: dict, after: dict) -> list[str]:
-    if before.get("format") != 1 or after.get("format") != 1:
+    if before.get("format") != 2 or after.get("format") != 2:
         raise ValueError("Unsupported router inventory format")
     differences = []
     if before.get("firmware") != after.get("firmware"):
         differences.append("CHANGED firmware")
-    for field, noun in (("packages", "package"), ("services", "service")):
+    for field, noun in (("packages", "package"), ("services", "service"),
+                        ("stock_files", "stock file")):
         left, right = before.get(field), after.get(field)
         if not isinstance(left, dict) or not isinstance(right, dict):
             raise ValueError("Invalid router inventory")
@@ -160,7 +192,7 @@ def main() -> None:
     if differences:
         print("\n".join(differences))
         raise SystemExit(1)
-    print("Router inventory matches: firmware, opkg packages and service states")
+    print("Router inventory matches: firmware, opkg packages, services and stock UI files")
 
 
 if __name__ == "__main__":

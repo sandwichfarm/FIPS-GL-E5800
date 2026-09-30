@@ -328,8 +328,8 @@ comparison passed. Two private inventories matched across all 1,062 opkg
 records and the selected service states. This establishes a baseline and
 shows natural timestamp drift; it does not demonstrate post-deployment
 rollback equivalence. A first-install rollback also leaves the recovery guard
-installed, which the inventory comparison will report until a safe cleanup
-path is provided or the owner accepts that persistent footprint.
+installed, which the inventory comparison reports. Cleanup is prepared below
+but has not been exercised on hardware.
 
 The state-audit tools now ship in the private offline recovery kit. The
 read-only inventory command captured the current firmware, 1,062 opkg records,
@@ -339,3 +339,19 @@ SSH agent. A locally assembled kit containing both audit tools passed
 `verify_recovery_kit.py` with the stock backup. `make check` passes 115 Python
 tests plus shell and Ansible syntax checks. The audit tools are ready for a
 guarded trial, but no post-deployment comparison exists yet.
+
+A first-install stock rollback cleanup is now prepared. Isolated tests require
+the exact `ROLLED_BACK` transaction result, no pending marker or candidate
+package/service, and a running stock screen before removing the standalone
+guard. The controller tool rejects package/configuration drift beyond the
+guard, encrypts and verifies the guard evidence before cleanup, then captures
+and compares final inventory and configuration again. A read-only run against
+the untouched stock router returned `STOCK_ALREADY_CLEAN`; no cleanup was run
+on hardware. A second private offline kit containing these tools passed
+verification. The route is only prepared for a first installation; restoring
+an older preexisting guard on an upgrade is still an open edge. The latest
+`make check` passes 122 Python tests plus shell and Ansible syntax checks.
+The inventory now also fingerprints the stock web app bundle and touchscreen
+binary. Two read-only v2 inventories on the live router matched, and both
+fingerprints still equal the reviewed 4.10.0 values. A read-only cleanup
+preflight using that inventory again returned `STOCK_ALREADY_CLEAN`.
