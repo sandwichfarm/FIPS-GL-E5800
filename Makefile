@@ -8,7 +8,7 @@ ANSIBLE_LOCAL_TEMP ?= $(CURDIR)/.cache/ansible-tmp
 export ANSIBLE_LOCAL_TEMP
 
 .PHONY: check dependency-audit inspect inspect-dependencies capture dashboard dev-image rust-check rust-test web-deps web-build web-test web-browser-test web-live-browser-test web-preview web-preview-host web-preview-serve web-preview-host-serve \
-        lab-build lab-up lab-test lab-down device-preview device-preview-host openwrt-build \
+        lab-build lab-up lab-test lab-down route-lan-test device-preview device-preview-host openwrt-build \
         package-fips package-web package-device
 
 check:
@@ -87,6 +87,9 @@ lab-up:
 lab-test:
 	docker compose -f dev/lab/compose.yml exec -T node-a python3 /workspace/dev/lab/integration.py
 	python3 dev/lab/lifecycle.py
+
+route-lan-test: lab-build
+	docker run --rm --privileged --network none -v "$(CURDIR):/workspace:ro" -w /workspace $(DEV_IMAGE) python3 dev/lab/route_advertisement.py
 
 lab-down:
 	docker compose -f dev/lab/compose.yml down

@@ -35,6 +35,7 @@ and licenses, runs Python tests, and checks Ansible syntax.
 make lab-build
 make lab-up
 make lab-test
+make route-lan-test
 make web-live-browser-test
 make lab-down
 ```
@@ -53,6 +54,14 @@ down -v` unless you deliberately want to discard these **test** identities.
 The lab exercises FIPS itself, not OpenWrt's service manager, firewall, package
 manager, hardware screen, or the real router. Results from the lab must be
 reported as local Linux evidence.
+`route-lan-test` creates an isolated client network namespace in a privileged
+container with no external network. It checks that the native sender waits for
+the gateway socket, emits a route-only multicast RA, answers a client Router
+Solicitation with hop limit 255, withdraws the route when the gateway disappears,
+and leaves the client's existing default route alone. On kernels built with
+`CONFIG_IPV6_ROUTE_INFO`, it also checks route installation and removal. Docker
+Desktop's LinuxKit kernel lacks that option, so its test reports packet checks
+only; route installation still needs a supported Linux client and hardware test.
 
 ## Interface previews
 
@@ -86,8 +95,9 @@ guard. The web page confirms only after the daemon and persistent identity are
 healthy. Gateway mode requires a reviewed public IPv6 route and ping probe
 saved during deployment. Gateway
 activation requires an existing IPv6 default route and LAN RA service. The
-route-only advertiser responds to valid Router Solicitations, but is unverified
-with LAN clients.
+route-only advertiser has passed packet exchange with an isolated Linux client;
+route installation remains unverified on the current LinuxKit kernel and on
+physical LAN clients.
 IPv4-only WAN activation remains gated until client routing and DNS behavior
 are tested; native IPv6 gateway behavior still requires hardware testing.
 The touchscreen needs a second tap to apply and the web page to confirm;

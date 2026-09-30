@@ -17,7 +17,9 @@ authorized plan after independent local work is finished.
   lifetime, so it cannot withdraw odhcpd's default route. Packet encoding,
   Router Solicitation validation, alias lifecycle and missing-instance checks
   have local tests. The Linux sender now replies to valid solicitations; this
-  receive path has not run on a LAN client. IPv4-only WAN
+  receive path passes an isolated Linux client packet exchange, including
+  unicast hop limit 255 and route withdrawal. LinuxKit lacks
+  `CONFIG_IPV6_ROUTE_INFO`, so route installation remains untested. IPv4-only WAN
   activation remains gated on a public IPv6 probe until real LAN client route
   and DNS behavior can be tested. On normal stop, alias removal now waits for
   the procd route instance to exit so the sender can withdraw its route. A

@@ -250,6 +250,7 @@ pub fn run(source: Ipv6Addr) -> io::Result<()> {
     }
     set_option(&fd, libc::IPPROTO_RAW, libc::IPV6_CHECKSUM, 2)?;
     set_option(&fd, libc::IPPROTO_IPV6, libc::IPV6_MULTICAST_HOPS, 255)?;
+    set_option(&fd, libc::IPPROTO_IPV6, libc::IPV6_UNICAST_HOPS, 255)?;
     set_option(&fd, libc::IPPROTO_IPV6, libc::IPV6_MULTICAST_LOOP, 0)?;
     let receive = receive_socket(&interface, interface_index)?;
 

@@ -77,8 +77,11 @@ a default RA or assigns the upstream benchmarking prefix. The old `route6`
 section under DHCP was ignored by upstream odhcpd. A separate route-only
 advertiser now sends an RFC 4191 option from a dedicated link-local alias.
 Packet encoding, Router Solicitation validation, and fake procd/address lifecycle
-tests pass. The Linux sender now replies to valid solicitations, but live
-solicitation handling, LAN client route installation, and VPN coexistence
+tests pass. An isolated Linux client now receives multicast advertisements,
+solicits a unicast reply with hop limit 255, and sees a zero-lifetime withdrawal;
+its default route remains unchanged. That test caught and fixed the sender's
+former unicast hop limit of 64. Docker Desktop's LinuxKit kernel lacks
+`CONFIG_IPV6_ROUTE_INFO`, so Linux route installation and VPN coexistence
 remain unverified. The existing public IPv6 gate still blocks IPv4-only WAN
 activation until that client path is proven.
 The service and confirmation health now also require a LAN IPv6 /64 before
@@ -192,6 +195,10 @@ encrypted offline-kit smoke paths, and the device offline preview passed in
 that checkout. Its two-node Docker lab passed IPv6 mesh ping and recovered
 the same identity and link after a forced node crash. Hosted GitHub CI has
 not run, and no candidate has been installed on the router.
+The later unicast-hop-limit fix changed the FIPS candidate to
+`a546192757f8f5d6985a9fa028e7c27ddf8c988f812ffcd897b5fa5e1f67c0b0`;
+its pinned ARM64 build and artifact verification passed locally. The clean
+checkout comparison above predates that fix.
 
 A second isolated checkout at `8181176` passed 94 Python tests, the locked web
 build and unit tests, synthetic and live-lab Playwright checks, the two-node
