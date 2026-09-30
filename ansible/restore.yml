@@ -38,8 +38,15 @@
       loop_control:
         loop_var: stack_component
 
-    - name: Check device dashboard runtime before installation
-      ansible.builtin.raw: python3 -c 'import PIL.Image; import numpy'
+    - name: Validate pinned offline dashboard runtime on the controller
+      ansible.builtin.command:
+        argv:
+          - "{{ controller_python }}"
+          - "{{ playbook_dir }}/../tools/offline_runtime.py"
+          - verify
+          - --root
+          - "{{ playbook_dir }}/.."
+      delegate_to: localhost
       changed_when: false
       check_mode: false
       when: "'device_ui' in restore_components"

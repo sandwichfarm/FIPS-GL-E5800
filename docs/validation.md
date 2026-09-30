@@ -280,3 +280,9 @@ The export needed a Git index for `check_sources.py` provenance checks;
 a normal checkout supplies it. Web unit and browser preview tests passed in
 the export, as did artifact verification, compatibility emission, dependency
 audit, and a relocated recovery kit with encrypted identity restore.
+
+The post-update `restore.yml --check` now validates touchscreen dependencies
+from the controller's pinned offline bundle. Its former router-side Python/Pillow
+probe could not pass on the observed fresh 4.10.0 firmware, which has neither
+installed. This dry run remains read-only and does not substitute for guarded
+installation or a hardware acceptance test.

@@ -64,6 +64,9 @@ unapproved and unverified.
    `ansible-playbook ansible/deploy.yml --ask-pass --check -e @ansible/vars/local.yml -e recovery_transaction=review1`.
    The project keeps `approved_profiles: []` by default, so installation is
    blocked until an actual reviewed profile is supplied privately.
+   `ansible/restore.yml --check` also validates the pinned offline dashboard
+   bundle on the controller. It does not require Python or Pillow to be installed
+   on a freshly updated router.
 
 Example local variable shape (replace every placeholder with reviewed evidence):
 
