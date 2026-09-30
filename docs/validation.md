@@ -192,3 +192,11 @@ encrypted offline-kit smoke paths, and the device offline preview passed in
 that checkout. Its two-node Docker lab passed IPv6 mesh ping and recovered
 the same identity and link after a forced node crash. Hosted GitHub CI has
 not run, and no candidate has been installed on the router.
+
+A second isolated checkout at `8181176` passed 94 Python tests, the locked web
+build and unit tests, synthetic and live-lab Playwright checks, the two-node
+crash/reconnect test, both encrypted recovery-kit paths, and the dependency
+audit. It reproduced the same three IPK hashes above with provenance schema 2,
+which hashes the ARM64 build recipe without invalidating FIPS for web-only Make
+changes. Its compatibility manifest generated successfully. Hardware and hosted
+CI gates remain open.
