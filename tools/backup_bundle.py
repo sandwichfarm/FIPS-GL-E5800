@@ -35,8 +35,10 @@ def restorable_fips_config(name: str) -> bool:
     )
 
 
-def read_plain(stream: io.BufferedIOBase, require_identity: bool) -> dict[str, bytes]:
+def read_plain_details(stream: io.BufferedIOBase, require_identity: bool
+                       ) -> tuple[dict[str, bytes], dict[str, tuple[int, int, int, int | float]]]:
     files: dict[str, bytes] = {}
+    metadata: dict[str, tuple[int, int, int, int | float]] = {}
     total = 0
     members = 0
     with tarfile.open(fileobj=stream, mode="r|gz") as archive:
@@ -67,6 +69,7 @@ def read_plain(stream: io.BufferedIOBase, require_identity: bool) -> dict[str, b
                 raise ValueError("Truncated backup file")
             total += member.size
             files[name] = data
+            metadata[name] = (member.mode, member.uid, member.gid, member.mtime)
     missing = REQUIRED_CONFIG - files.keys()
     if require_identity:
         missing |= REQUIRED_IDENTITY - files.keys()
@@ -75,14 +78,19 @@ def read_plain(stream: io.BufferedIOBase, require_identity: bool) -> dict[str, b
     required = REQUIRED_CONFIG | (REQUIRED_IDENTITY if require_identity else set())
     if any(not files[name] for name in required):
         raise ValueError("Backup contains an empty required configuration or identity file")
-    return files
+    return files, metadata
+
+
+def read_plain(stream: io.BufferedIOBase, require_identity: bool) -> dict[str, bytes]:
+    return read_plain_details(stream, require_identity)[0]
 
 
 def inspect_plain(stream: io.BufferedIOBase, require_identity: bool) -> set[str]:
     return set(read_plain(stream, require_identity))
 
 
-def read_encrypted(backup: Path, identity: Path, require_identity: bool) -> dict[str, bytes]:
+def read_encrypted_details(backup: Path, identity: Path, require_identity: bool
+                           ) -> tuple[dict[str, bytes], dict[str, tuple[int, int, int, int | float]]]:
     if backup.is_symlink() or not backup.is_file() or backup.suffix != ".age":
         raise ValueError("Encrypted backup is missing or linked")
     if identity.is_symlink() or not identity.is_file():
@@ -100,7 +108,7 @@ def read_encrypted(backup: Path, identity: Path, require_identity: bool) -> dict
         raise ValueError("age CLI is required to verify the encrypted backup") from error
     try:
         try:
-            files = read_plain(process.stdout, require_identity)
+            files, metadata = read_plain_details(process.stdout, require_identity)
         except (tarfile.TarError, OSError, EOFError, zlib.error) as error:
             raise ValueError("Encrypted backup did not contain a valid gzip tar archive") from error
         if len(process.stdout.read(1024 * 1024 + 1)) > 1024 * 1024:
@@ -108,13 +116,17 @@ def read_encrypted(backup: Path, identity: Path, require_identity: bool) -> dict
         process.stdout.close()
         if process.wait() != 0:
             raise ValueError("Encrypted backup decryption failed")
-        return files
+        return files, metadata
     finally:
         if process.stdout is not None:
             process.stdout.close()
         if process.poll() is None:
             process.kill()
             process.wait()
+
+
+def read_encrypted(backup: Path, identity: Path, require_identity: bool) -> dict[str, bytes]:
+    return read_encrypted_details(backup, identity, require_identity)[0]
 
 
 def verify_encrypted(backup: Path, identity: Path, require_identity: bool) -> set[str]:

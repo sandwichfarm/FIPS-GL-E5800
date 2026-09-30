@@ -44,6 +44,8 @@ COPIES = (
     "tools/build_provenance.py",
     "tools/backup_bundle.py",
     "tools/capture_backup.py",
+    "tools/compare_backups.py",
+    "tools/router_inventory.py",
     "tools/stage_backup.py",
     "tools/render_backup_restore.py",
     "tools/stage_previous.py",

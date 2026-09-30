@@ -81,6 +81,46 @@ matching firmware fingerprint are not approval or hardware verification.
    bundle on the controller. It does not require Python or Pillow to be installed
    on a freshly updated router.
 
+For the owner-required same-state check, take a separate baseline immediately
+before a trial and another capture after any rollback. From the repository root,
+with the ignored SSH and age keys prepared in `private/`:
+
+```sh
+TRIAL=reviewed_trial_id
+mkdir -p private/predeploy/inventory
+chmod 0700 private/predeploy/inventory
+python3 tools/capture_backup.py --ssh-key private/ssh/gl-e5800_ed25519 \
+  --recipient "$(age-keygen -y private/predeploy/age-identity.txt)" \
+  --identity private/predeploy/age-identity.txt \
+  --output "private/predeploy/backups/$TRIAL-before.age"
+python3 tools/router_inventory.py capture --ssh-key private/ssh/gl-e5800_ed25519 \
+  --output "private/predeploy/inventory/$TRIAL-before.json"
+# After the guarded rollback has completed:
+python3 tools/capture_backup.py --ssh-key private/ssh/gl-e5800_ed25519 \
+  --recipient "$(age-keygen -y private/predeploy/age-identity.txt)" \
+  --identity private/predeploy/age-identity.txt \
+  --output "private/predeploy/backups/$TRIAL-after.age"
+python3 tools/router_inventory.py capture --ssh-key private/ssh/gl-e5800_ed25519 \
+  --output "private/predeploy/inventory/$TRIAL-after.json"
+python3 tools/compare_backups.py --before "private/predeploy/backups/$TRIAL-before.age" \
+  --after "private/predeploy/backups/$TRIAL-after.age" \
+  --identity private/predeploy/age-identity.txt
+python3 tools/router_inventory.py compare \
+  --before "private/predeploy/inventory/$TRIAL-before.json" \
+  --after "private/predeploy/inventory/$TRIAL-after.json"
+```
+
+The encrypted-backup comparison checks every captured UCI/FIPS/dashboard file's
+contents, mode, owner and modification time without printing contents. Use
+`--ignore-mtime` only after reviewing a timestamp-only difference; it still
+checks contents, mode and ownership. The inventory comparison checks firmware,
+all opkg package versions/statuses, and selected service enable/running states.
+It will report the newly installed `fips-recovery` guard after a first-install
+rollback; that persistent footprint is an open same-state gap, not an allowed
+silent exception. Neither comparison proves LAN-client internet/VPN behavior,
+web rendering or the physical display; verify those separately before
+confirmation. Keep both captures and inventories out of Git.
+
 Example local variable shape (replace every placeholder with reviewed evidence):
 
 ```yaml

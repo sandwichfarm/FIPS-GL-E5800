@@ -318,3 +318,24 @@ watcher. A local upgrade test restores an active dashboard; a failed dashboard
 restart leaves rollback pending for retry. `make check` passes 106 Python tests,
 shell syntax, and Ansible syntax. These remain local tests; the actual router
 has not had a FIPS package installed or rolled back.
+
+The new read-only state audit was exercised against the untouched 4.10.0
+router on 2026-09-30. Two independently encrypted configuration captures
+matched in file contents, modes and ownership; only the modification time of
+`etc/config/cellular/slot_map.json` changed between captures. The strict
+comparison reported that difference, while the explicit `--ignore-mtime`
+comparison passed. Two private inventories matched across all 1,062 opkg
+records and the selected service states. This establishes a baseline and
+shows natural timestamp drift; it does not demonstrate post-deployment
+rollback equivalence. A first-install rollback also leaves the recovery guard
+installed, which the inventory comparison will report until a safe cleanup
+path is provided or the owner accepts that persistent footprint.
+
+The state-audit tools now ship in the private offline recovery kit. The
+read-only inventory command captured the current firmware, 1,062 opkg records,
+and eleven service states over the dedicated SSH key. The keyed backup command
+also captured and validated a fresh encrypted archive without using a shared
+SSH agent. A locally assembled kit containing both audit tools passed
+`verify_recovery_kit.py` with the stock backup. `make check` passes 115 Python
+tests plus shell and Ansible syntax checks. The audit tools are ready for a
+guarded trial, but no post-deployment comparison exists yet.

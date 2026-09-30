@@ -59,18 +59,25 @@ def prepare_capture(recipient: str, identity: Path, output: Path) -> None:
 
 
 def capture(host: str, recipient: str, identity: Path, output: Path,
-            require_fips_identity: bool = False) -> Path:
+            require_fips_identity: bool = False, ssh_key: Path | None = None) -> Path:
     if not host or host.startswith("-") or any(char.isspace() for char in host):
         raise ValueError("Invalid SSH host")
+    if ssh_key is not None and (ssh_key.is_symlink() or not ssh_key.is_file()
+                                or stat.S_IMODE(ssh_key.stat().st_mode) & 0o077):
+        raise ValueError("SSH identity must be a private regular file")
     prepare_capture(recipient, identity, output)
     descriptor, temporary = tempfile.mkstemp(prefix=".backup-", suffix=".age", dir=output.parent)
     temporary = Path(temporary)
     ssh = None
     try:
         with os.fdopen(descriptor, "wb") as ciphertext:
+            ssh_command = ["ssh", "-T", "-o", "BatchMode=yes",
+                           "-o", "StrictHostKeyChecking=yes", "-o", "ConnectTimeout=8"]
+            if ssh_key is not None:
+                ssh_command += ["-o", "IdentitiesOnly=yes", "-o", "PasswordAuthentication=no",
+                                "-o", "ControlPath=none", "-i", str(ssh_key)]
             ssh = subprocess.Popen(
-                ["ssh", "-T", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes",
-                 "-o", "ConnectTimeout=8", host, REMOTE_ARCHIVE],
+                [*ssh_command, host, REMOTE_ARCHIVE],
                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             )
             try:
@@ -138,6 +145,8 @@ if __name__ == "__main__":
     parser.add_argument("--identity", type=Path, required=True)
     parser.add_argument("--output", type=Path, default=ROOT / "private/identity-config-backup.age")
     parser.add_argument("--require-fips-identity", action="store_true")
+    parser.add_argument("--ssh-key", type=Path,
+                        help="Dedicated SSH identity for a direct key-only read-only capture")
     parser.add_argument("--from-stdin", action="store_true",
                         help="Read a marked base64 archive from an Ansible SSH capture")
     args = parser.parse_args()
@@ -146,4 +155,4 @@ if __name__ == "__main__":
         print(capture_received(encoded, args.recipient, args.identity, args.output))
     else:
         print(capture(args.host, args.recipient, args.identity, args.output,
-                      args.require_fips_identity))
+                      args.require_fips_identity, args.ssh_key))

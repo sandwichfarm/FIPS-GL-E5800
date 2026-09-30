@@ -122,11 +122,18 @@ class BackupBundleTests(unittest.TestCase):
             output_dir = root / "output"
             output_dir.mkdir(mode=0o700)
             captured = output_dir / "router-backup.age"
+            ssh_key = root / "router-ssh-key"
+            ssh_key.write_text("synthetic test key")
+            ssh_key.chmod(0o600)
             with patch.dict(os.environ, {
                 "PATH": f"{fake_bin}:{os.environ['PATH']}",
                 "FIPS_FAKE_BACKUP": str(plaintext),
             }):
                 self.assertEqual(capture("root@synthetic", recipient, identity, captured, True), captured)
+                keyed = output_dir / "router-keyed.age"
+                self.assertEqual(capture("root@synthetic", recipient, identity, keyed,
+                                         True, ssh_key), keyed)
+                self.assertEqual(verify_encrypted(keyed, identity, True), set(CONFIG | IDENTITY))
             self.assertEqual(verify_encrypted(captured, identity, True), set(CONFIG | IDENTITY))
             restored = output_dir / "restored"
             digests = stage(captured, identity, restored, True)
