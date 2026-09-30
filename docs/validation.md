@@ -30,7 +30,7 @@ requested deployment/testing pass. Firmware tuples remain unapproved by default.
 The preparation record above describes the original imported packages. Current
 candidate packages are built by `tools/package.py` and verified by
 `tools/verify_artifacts.py`; their digests differ from the imported FIPS release
-and initial dashboard build. Ninety-three Python tests, including the age CLI
+and initial dashboard build. Ninety-four Python tests, including the age CLI
 round trip, and Ansible syntax checks
 pass. Fake OpenWrt gateway lifecycle tests restore DNS/RA and sysctl settings
 after a failed start; LAN client and router hardware behavior are unverified.
@@ -46,7 +46,10 @@ production and synthetic preview bundles build from the locked npm tree, all
 five web tests pass, and Playwright checks online, offline, request error,
 stage, confirm, rollback, and narrow viewport behavior. Desktop and mobile
 screenshots were inspected locally. These checks do not prove integration with
-GL.iNet's proprietary web shell. Two panel tests cover stale online state
+GL.iNet's proprietary web shell. A separate Playwright run used the live lab
+node and management binary for read-only status, public identity, peers,
+configuration, recovery, and diagnostics; it mounted the lab state read-only
+and had no external network access. Two panel tests cover stale online state
 after a failed refresh or peer request; the panel clears stale status and
 configuration on either failure. Both synthetic offline-kit smoke paths pass,
 including age encryption and post-firmware identity restore. Neither CI nor

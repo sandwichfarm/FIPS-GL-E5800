@@ -73,8 +73,10 @@ authorized plan after independent local work is finished.
   builds and its FIPS panel renders offline and against a live lab daemon.
   Playwright validates its synthetic online, offline, request-error, stage,
   confirm, and rollback flows at desktop and mobile widths. Screenshots were
-  inspected locally. Integration with the proprietary GL.iNet shell remains
-  unverified.
+  inspected locally. A second Playwright check reads real status, identity,
+  peer, configuration, recovery, and diagnostic responses from a live lab node
+  through the management binary. Integration with the proprietary GL.iNet
+  shell remains unverified.
 - The pinned Rust 1.94.1/Zig 0.13.0 container cross-builds all four static
   ARM64 binaries, including the Router Solicitation handler. All three current
   IPKs pass payload and provenance verification, and the consolidated
@@ -83,7 +85,7 @@ authorized plan after independent local work is finished.
   re-established the two-node mesh after a forced node restart. A hosted CI
   run remains to be observed.
 - The router-local guard and new transactional Ansible playbook are authored.
-  Ninety-three Python tests pass locally with no skips, including the age
+  Ninety-four Python tests pass locally with no skips, including the age
   encryption round trip and fake-opkg deadline, reboot, checksum, interrupted
   install, DNS/UI health failures, identity and configuration rollback.
   An interrupted opkg install left in `unpacked` state is now removed on

@@ -32,6 +32,8 @@ jobs:
         run: make rust-test
       - name: Build and test native multi-node lab
         run: make lab-build lab-up lab-test
+      - name: Exercise web panel against live lab backend
+        run: make web-live-browser-test
       - name: Stop lab
         if: always()
         run: make lab-down

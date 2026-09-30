@@ -14,6 +14,7 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 BINARIES = ("fips", "fipsctl", "fips-gateway", "fips-router-admin")
 TOOLCHAIN = {"rustc": "1.94.1", "zig": "0.13.0", "cargo-zigbuild": "0.19.8"}
+BUILD_VARIABLES = ("DEV_IMAGE", "PROJECT_MOUNT", "RUST_RUN")
 
 
 def digest(path: Path) -> str:
@@ -35,6 +36,29 @@ def admin_tree_digest() -> str:
     return checksum.hexdigest()
 
 
+def build_recipe_digest(makefile: str) -> str:
+    """Hash only Make inputs that can change the pinned ARM64 build."""
+    lines = makefile.splitlines()
+    selected = []
+    for name in BUILD_VARIABLES:
+        matches = [line for line in lines if line.startswith(f"{name} :=")]
+        if len(matches) != 1 or matches[0].endswith("\\"):
+            raise ValueError(f"Missing or multiline OpenWrt build variable: {name}")
+        selected.extend(matches)
+    targets = [index for index, line in enumerate(lines) if line == "openwrt-build:"]
+    if len(targets) != 1:
+        raise ValueError("Missing or duplicate OpenWrt build target")
+    recipe = []
+    for line in lines[targets[0] + 1:]:
+        if not line.startswith("\t"):
+            break
+        recipe.append(line)
+    if not recipe:
+        raise ValueError("OpenWrt build target has no recipe")
+    selected.extend(["openwrt-build:", *recipe])
+    return hashlib.sha256(("\n".join(selected) + "\n").encode()).hexdigest()
+
+
 def current_context() -> dict:
     from check_sources import check
 
@@ -48,13 +72,13 @@ def current_context() -> dict:
         "admin_tree_sha256": admin_tree_digest(),
         "dockerfile_sha256": digest(ROOT / "dev/Dockerfile"),
         "git_shim_sha256": digest(ROOT / "dev/tool-shims/git"),
-        "makefile_sha256": digest(ROOT / "Makefile"),
+        "build_recipe_sha256": build_recipe_digest((ROOT / "Makefile").read_text()),
     }
 
 
 def record_for_bins(binary_dir: Path) -> dict:
     return {
-        "schema": 1,
+        "schema": 2,
         "target": "aarch64-unknown-linux-musl",
         "toolchain": TOOLCHAIN,
         **current_context(),
@@ -82,10 +106,10 @@ def verify_record(record: dict, payload: dict[str, str] | None = None,
                   binary_dir: Path | None = None, current: bool = True) -> None:
     if not isinstance(record, dict) or set(record) != {
         "schema", "target", "toolchain", "source", "admin_tree_sha256",
-        "dockerfile_sha256", "git_shim_sha256", "makefile_sha256", "binaries",
+        "dockerfile_sha256", "git_shim_sha256", "build_recipe_sha256", "binaries",
     }:
         raise ValueError("Missing or malformed FIPS build provenance")
-    if record["schema"] != 1 or record["target"] != "aarch64-unknown-linux-musl" or record["toolchain"] != TOOLCHAIN:
+    if record["schema"] != 2 or record["target"] != "aarch64-unknown-linux-musl" or record["toolchain"] != TOOLCHAIN:
         raise ValueError("FIPS build provenance has an unsupported builder")
     source = record["source"]
     if (not isinstance(source, dict) or set(source) != {"path", "url", "ref", "commit", "license", "tree_sha256"}
@@ -94,7 +118,7 @@ def verify_record(record: dict, payload: dict[str, str] | None = None,
             or any(c not in "0123456789abcdef" for c in source["commit"])):
         raise ValueError("FIPS build provenance has an invalid source record")
     for value in (source["tree_sha256"], record["admin_tree_sha256"],
-                  record["dockerfile_sha256"], record["git_shim_sha256"], record["makefile_sha256"]):
+                  record["dockerfile_sha256"], record["git_shim_sha256"], record["build_recipe_sha256"]):
         if not isinstance(value, str) or len(value) != 64 or any(c not in "0123456789abcdef" for c in value):
             raise ValueError("FIPS build provenance has an invalid source checksum")
     binaries = record["binaries"]

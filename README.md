@@ -46,11 +46,12 @@ decompressed JavaScript is still compiled code, not recovered original source.
   still needs a compatible Pillow dependency package before device installation.
 - Two real Linux FIPS nodes connected in containers; IPv6 mesh ping and identity
   preservation after an abrupt process crash passed locally.
-- ARM64 binaries and three deterministic candidate packages built locally before
-  the latest backend edits. Current ARM64 binaries also cross-build with the host
-  toolchain, but the FIPS candidate requires a fresh pinned CI-toolchain build.
+- All four ARM64 binaries and three deterministic candidate packages build with
+  the pinned Rust/Zig toolchain. A fresh checkout reproduced package hashes.
   Router-local rollback passes fake-opkg fault tests. CI/CD and guarded Ansible
   deployment are authored, with hosted and hardware verification still pending.
+- Playwright checks synthetic configuration flows and reads live status, public
+  identity, peers, and diagnostics from the two-node lab through the backend.
 - Configuration activation and rollback pass local fake-service tests. Isolated
   gateway behavior, touchscreen Pillow packaging, a real encrypted backup and
   on-device verification remain in progress.

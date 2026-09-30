@@ -35,6 +35,7 @@ and licenses, runs Python tests, and checks Ansible syntax.
 make lab-build
 make lab-up
 make lab-test
+make web-live-browser-test
 make lab-down
 ```
 
@@ -42,6 +43,10 @@ The lab creates two persistent, private identities in a Docker volume and
 starts separate Linux containers with `/dev/net/tun` and `NET_ADMIN`. Its test
 requires two connected FIPS nodes and a successful IPv6 ping through `fips0`.
 It then kills one node, restarts it, and checks the identity and link recover.
+`web-live-browser-test` runs the web panel in Playwright against the real
+management binary and node A's live control socket. It mounts the lab volume
+read-only and tests status, public identity, peers, configuration, recovery,
+and diagnostics. It does not use the router or GL.iNet's session service.
 `lab-down` stops containers but retains the volume. Do not use `docker compose
 down -v` unless you deliberately want to discard these **test** identities.
 
@@ -73,7 +78,8 @@ modes; it never sends requests to the router. `make web-preview-host-serve`
 uses an already installed host npm tree for faster UI iteration. Both preview
 bundles remain under ignored `.cache/`. Playwright exercises the synthetic
 status, error, stage, confirm, and rollback flows at desktop and mobile widths.
-It does not prove that the view works inside GL.iNet's application.
+The live lab browser check uses actual backend responses for read-only views.
+Neither check proves that the view works inside GL.iNet's application.
 
 Configuration changes are staged, then activated under a 3-minute router-local
 guard. The web page confirms only after the daemon and persistent identity are
@@ -112,7 +118,9 @@ Candidate inspection also restricts owned payload paths and control scripts;
 the touchscreen scripts must match the reviewed local package sources.
 `make openwrt-build` writes a build stamp from inside the pinned Rust/Zig image.
 `make package-fips` rejects binaries changed since that build, current source
-edits missing from the stamp, or a stamp from another toolchain. A host-only
+edits missing from the stamp, or a stamp from another toolchain. The stamp hashes
+only the ARM64 build recipe and its Make variables, so web-only Make edits do
+not force another FIPS cross-build. A host-only
 cross-build is useful for diagnosis but cannot produce an approved FIPS IPK.
 The tracked `upstream/targets.json` pins the observed web and stock-screen
 hashes used by every package manifest. A reviewed deployment profile must

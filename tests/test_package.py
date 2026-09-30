@@ -23,6 +23,18 @@ def elf_fixture(name):
 
 
 class DeterministicPackageTests(unittest.TestCase):
+    def test_web_make_target_does_not_invalidate_arm64_build_recipe(self):
+        makefile = (build_provenance.ROOT / "Makefile").read_text()
+        original = build_provenance.build_recipe_digest(makefile)
+        self.assertEqual(
+            original,
+            build_provenance.build_recipe_digest(makefile.replace("web-preview:", "web-preview-local:", 1)),
+        )
+        self.assertNotEqual(
+            original,
+            build_provenance.build_recipe_digest(makefile.replace("aarch64-unknown-linux-musl", "aarch64-unknown-linux-gnu", 1)),
+        )
+
     def test_touchscreen_package_declares_all_runtime_dependencies(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

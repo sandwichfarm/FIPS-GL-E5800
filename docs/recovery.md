@@ -237,7 +237,7 @@ available to pull requests. It rebuilds packages and checks the private profile'
 candidate hashes before invoking the same Ansible transaction. Its success means
 the transaction is pending, not confirmed; run the separate confirmation playbook
 from the local controller after checking both interfaces. This repository
-has no upstream remote or hosted runner configured, so CI/CD is authored but
+has an origin remote but no hosted runner configured, so CI/CD is authored but
 not yet observed running on GitHub.
 
 ## Recovery ladder
@@ -246,7 +246,7 @@ not yet observed running on GitHub.
 | --- | --- |
 | Router-local deadline, reboot and interrupted-install rollback | Passed isolated fake-opkg/filesystem tests; not run on the GL-E5800. |
 | Post-firmware identity restore followed by controller loss | Passed isolated filesystem test; not run on OpenWrt hardware. |
-| Offline kit integrity and tamper detection | Passed synthetic two-UI kit smoke test; real age decryption is authored in CI but has not run here. |
+| Offline kit integrity and tamper detection | Passed synthetic two-UI kit smoke and local age encrypt/decrypt tests; real router backup remains untested. |
 | Four-second soft reset and ten-second factory reset | Vendor documentation only; neither reset was performed. |
 | No-SSH debrick/support procedure | Vendor documentation only; no debrick action was performed. |
 

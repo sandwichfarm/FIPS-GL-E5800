@@ -7,7 +7,8 @@
     "preview-build": "webpack --config webpack.preview.cjs",
     "watch": "webpack --config webpack.config.cjs --watch",
     "test": "node --test test/*.test.cjs",
-    "test:browser": "node test/browser.cjs"
+    "test:browser": "node test/browser.cjs",
+    "test:live": "node test/live_browser.cjs"
   },
   "devDependencies": {
     "css-loader": "6.11.0",

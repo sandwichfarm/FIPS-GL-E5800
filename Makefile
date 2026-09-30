@@ -7,7 +7,7 @@ NODE_RUN := docker run --rm --user "$(shell id -u):$(shell id -g)" -e HOME=/work
 ANSIBLE_LOCAL_TEMP ?= $(CURDIR)/.cache/ansible-tmp
 export ANSIBLE_LOCAL_TEMP
 
-.PHONY: check dependency-audit inspect inspect-dependencies capture dashboard dev-image rust-check rust-test web-deps web-build web-test web-browser-test web-preview web-preview-host web-preview-serve web-preview-host-serve \
+.PHONY: check dependency-audit inspect inspect-dependencies capture dashboard dev-image rust-check rust-test web-deps web-build web-test web-browser-test web-live-browser-test web-preview web-preview-host web-preview-serve web-preview-host-serve \
         lab-build lab-up lab-test lab-down device-preview device-preview-host openwrt-build \
         package-fips package-web package-device
 
@@ -62,6 +62,9 @@ web-preview:
 
 web-browser-test: web-preview
 	docker run --rm --ipc=host -v "$(CURDIR):/workspace:ro" -w /workspace/apps/web-ui $(PLAYWRIGHT_IMAGE) npm run test:browser
+
+web-live-browser-test: web-preview
+	docker run --rm --network none -v "$(CURDIR):/workspace:ro" -v e5800-fips-lab_lab_state:/state:ro -w /workspace/apps/web-ui $(PLAYWRIGHT_IMAGE) npm run test:live
 
 web-preview-host:
 	mkdir -p .cache/web-preview
