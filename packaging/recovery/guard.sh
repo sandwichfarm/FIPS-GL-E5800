@@ -10,12 +10,14 @@ PENDING="$ROOT/pending"
 LOCK_DIR="$TEST_ROOT/tmp/fips-recovery"
 LOCK="$LOCK_DIR/guard.lock"
 PACKAGES='fips gl-sdk4-ui-fips gl-e5800-dashboard'
+RUNTIME_LIST="$ROOT/runtime-packages"
 
 fail() { echo "fips recovery: $*" >&2; exit 1; }
 now() { if [ -n "${FIPS_TEST_NOW:-}" ]; then echo "$FIPS_TEST_NOW"; else date +%s; fi; }
 uptime() { if [ -n "${FIPS_TEST_UPTIME:-}" ]; then echo "$FIPS_TEST_UPTIME"; else cut -d. -f1 /proc/uptime; fi; }
 boot_id() { if [ -n "${FIPS_TEST_BOOT_ID:-}" ]; then echo "$FIPS_TEST_BOOT_ID"; else cat /proc/sys/kernel/random/boot_id; fi; }
 valid_id() { case "$1" in ''|*[!A-Za-z0-9_-]*) return 1;; *) return 0;; esac; }
+valid_package() { case "$1" in ''|*[!A-Za-z0-9_.+-]*) return 1;; *) return 0;; esac; }
 installed() {
     opkg status "$1" 2>/dev/null | awk -v name="$1" '
         /^Package:/ { selected=($2 == name) }
@@ -92,6 +94,18 @@ arm() {
     printf '%s\n' "$mode" > "$ROOT/$txn/backup/mode"
     chmod 0600 "$ROOT/$txn/backup/mode"
     : > "$ROOT/$txn/backup/installed"
+    : > "$ROOT/$txn/backup/runtime-packages"
+    : > "$ROOT/$txn/backup/runtime-installed"
+    if [ "$mode" = packages ] && [ -f "$RUNTIME_LIST" ]; then
+        while IFS= read -r package; do
+            valid_package "$package" || fail 'invalid offline runtime package list'
+            printf '%s\n' "$package" >> "$ROOT/$txn/backup/runtime-packages"
+            if installed "$package"; then
+                printf '%s\n' "$package" >> "$ROOT/$txn/backup/runtime-installed"
+            fi
+        done < "$RUNTIME_LIST"
+    fi
+    chmod 0600 "$ROOT/$txn/backup/runtime-packages" "$ROOT/$txn/backup/runtime-installed"
     if [ "$mode" = packages ]; then
         for package in $PACKAGES; do
             if installed "$package"; then
@@ -190,6 +204,14 @@ rollback() {
                 opkg remove "$package" || return 1
             fi
         done
+        # The list is in dependent-first order. Never remove a runtime package
+        # that was present before this transaction, even after a partial install.
+        while IFS= read -r package; do
+            valid_package "$package" || return 1
+            if ! grep -qx "$package" "$ROOT/$txn/backup/runtime-installed" && present "$package"; then
+                opkg remove "$package" || return 1
+            fi
+        done < "$ROOT/$txn/backup/runtime-packages"
         for package in $PACKAGES; do
             if grep -qx "$package" "$ROOT/$txn/backup/installed"; then
                 verify_previous "$package"

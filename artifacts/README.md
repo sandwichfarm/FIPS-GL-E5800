@@ -5,6 +5,7 @@ From a clean checkout, follow [local development](../docs/local-development.md):
 
 ```sh
 make dev-image web-deps web-build check rust-check rust-test
+make vendor-deps
 make lab-build lab-up lab-test lab-down
 make openwrt-build package-fips package-web package-device
 python3 tools/verify_artifacts.py
@@ -31,3 +32,8 @@ passed a TrueType render using the router's musl loader and stock FreeType, but
 OpenWrt service operation is still unverified. Register
 only reviewed candidate and exact known-good IPK paths and SHA-256 values in an
 ignored private Ansible profile. Do not register stock UI packages as candidates.
+`make vendor-deps` downloads and verifies 34 checksum-pinned OpenWrt runtime
+IPKs into ignored `artifacts/runtime/`. The compatibility manifest and offline
+recovery kit include them, so installation does not require a router-side feed
+refresh. Their source and license records are pinned in
+`upstream/vendor/runtime.json` and checked by the dependency audit.

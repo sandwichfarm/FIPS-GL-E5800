@@ -246,3 +246,24 @@ The first run exposed a local test-harness issue because Docker Desktop bind
 mounts could not host the Unix control socket; moving that socket to the
 container's `/tmp` made the control query pass. This is an external peer
 link check from the controller's network, not a router connectivity test.
+The first-install Ansible profile in ignored `ansible/vars/local.yml` pins the
+current three candidate hashes and public test peer with
+`check_only_fixture: true`, so a real deployment cannot use it accidentally.
+The added free-space preflight passed a local Ansible role run and rejected an
+injected insufficient-space threshold. Read-only router checks found 2.8 GiB
+available on `/` and 800 MiB on `/tmp`; the observed 4.10.0 profile passed
+the full three-component Ansible check-mode run with zero changes. The chosen
+IPv4 ping and DNS probes also succeeded from the router.
+
+The live router has no opkg feed indexes and is missing Python, NumPy, TIFF,
+WebP and regional timezone packages required by the dashboard. A pinned
+dependency closure from the 4.10.0 vendor feeds contains 34 IPKs (16.0 MB
+compressed). A read-only comparison of their 1,982 non-directory payload paths
+against the live router found zero existing-file collisions. The controller
+verifies pinned IPK checksums, control metadata, source/license records and protected
+stock paths before staging. Local fake-opkg tests cover first install,
+idempotence, a missing/dependent package, and rollback that removes only
+new runtime packages after controller loss. The relocated offline kit verifies
+all runtime IPKs and renders a syntactically valid installer without feed
+access. The complete Python suite now passes 101 tests; actual opkg installation
+and rollback of these feed IPKs remain hardware gates.

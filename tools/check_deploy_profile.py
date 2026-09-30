@@ -7,6 +7,7 @@ from pathlib import Path
 
 from verify_artifacts import ARTIFACTS, EXPECTED, verify
 from backup_bundle import read_encrypted, require_enabled_fips, validate_gateway_ipv6_probe
+from offline_runtime import verify as verify_offline_runtime
 
 
 def main() -> None:
@@ -18,6 +19,8 @@ def main() -> None:
     except ImportError as error:
         raise SystemExit("PyYAML is required on the trusted deployment runner") from error
     profile = yaml.safe_load(args.profile.read_text())
+    if "device_ui" in profile["restore_components"]:
+        verify_offline_runtime()
     for component in profile["restore_components"]:
         verify(component, announce=False)
         expected = ARTIFACTS / EXPECTED[component]

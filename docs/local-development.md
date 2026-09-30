@@ -129,6 +129,7 @@ make openwrt-build
 make package-fips
 make package-web
 make package-device
+make vendor-deps
 python3 tools/verify_artifacts.py
 python3 tools/compatibility_manifest.py
 python3 tools/ipk.py artifacts/gl-sdk4-ui-fips_0.1.0-1_all.ipk --sha256 DIGEST --component web_ui --candidate
@@ -154,8 +155,9 @@ The tracked `upstream/targets.json` pins the observed web and stock-screen
 hashes used by every package manifest. A reviewed deployment profile must
 match that exact tuple; changing firmware requires new read-only inspection
 and a rebuilt candidate set.
-The dependency audit writes `artifacts/dependencies.json` from both Cargo locks
-and the npm lock. It checks registry checksums and known license identifiers;
+The dependency audit writes `artifacts/dependencies.json` from both Cargo locks,
+the npm lock and pinned OpenWrt runtime IPKs. It checks lockfile integrity
+records, the local IPK checksums, and known license identifiers;
 the inventory is for review and does not establish legal compliance.
 
 Run `python3 tools/verify_artifacts.py` after packaging to compare all three
@@ -174,6 +176,14 @@ and stock FreeType. This is an ABI compatibility check, not a hardware service
 test. Keep the pinned IPK, source record, and bundled license together. Run
 `make inspect-dependencies` for a fresh read-only dependency report after any
 firmware update.
+
+The router's opkg index directory is empty after the 4.10.0 update. The
+dashboard needs Python, NumPy and supporting libraries, so `make vendor-deps`
+fetches their exact feed IPKs to `artifacts/runtime/` on the controller.
+Ansible verifies all 34 IPKs before router writes, installs only missing ones
+under the rollback deadline and removes only those introduced by that
+transaction if it rolls back. The offline kit copies them for recovery without
+router-side feed access. Rebuild this pin set for a different firmware feed.
 
 `ansible/deploy.yml` stages known-good IPKs and arms the router-local rollback
 guardian before any package change. It leaves successful installs pending until

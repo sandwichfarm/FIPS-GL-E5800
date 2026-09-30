@@ -1,0 +1,36 @@
+- name: Install pinned offline dashboard runtime under the rollback guard
+  block:
+    - name: Allocate controller staging for pinned dashboard runtime
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: e5800-runtime-
+      delegate_to: localhost
+      register: runtime_stage
+
+    - name: Render verified offline dependency installer on controller
+      ansible.builtin.command:
+        argv:
+          - "{{ controller_python }}"
+          - "{{ playbook_dir }}/../tools/offline_runtime.py"
+          - render
+          - --root
+          - "{{ playbook_dir }}/.."
+          - --output
+          - "{{ runtime_stage.path }}/install.sh"
+      delegate_to: localhost
+      changed_when: false
+
+    - name: Install only missing pinned runtime packages under rollback guard
+      ansible.builtin.script:
+        cmd: "{{ runtime_stage.path }}/install.sh"
+        executable: /bin/sh
+      register: runtime_install
+      changed_when: "'RUNTIME_CHANGED' in runtime_install.stdout"
+      failed_when: "'RUNTIME_READY' not in runtime_install.stdout"
+  always:
+    - name: Remove controller runtime staging
+      ansible.builtin.file:
+        path: "{{ runtime_stage.path }}"
+        state: absent
+      delegate_to: localhost
+      when: runtime_stage is defined and runtime_stage.path is defined

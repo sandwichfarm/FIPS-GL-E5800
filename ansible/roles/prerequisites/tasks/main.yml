@@ -1,3 +1,20 @@
+- name: Check free space for package dependencies, staging and local rollback
+  ansible.builtin.raw: |
+    set -eu
+    root_free=$(df -Pk / | awk 'NR == 2 {print $4}')
+    tmp_free=$(df -Pk /tmp | awk 'NR == 2 {print $4}')
+    case "$root_free:$tmp_free" in *[!0-9:]*|:*|*:) exit 1;; esac
+    if [ "$root_free" -lt {{ recovery_min_root_kib | int }} ]; then
+      echo "Insufficient root filesystem space for guarded package deployment" >&2
+      exit 1
+    fi
+    if [ "$tmp_free" -lt {{ recovery_min_tmp_kib | int }} ]; then
+      echo "Insufficient /tmp space for verified package installers" >&2
+      exit 1
+    fi
+  changed_when: false
+  check_mode: false
+
 - name: Check FIPS kernel prerequisites
   ansible.builtin.raw: |
     set -eu

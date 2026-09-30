@@ -39,6 +39,8 @@
           - recovery_transaction is match('^[A-Za-z0-9_-]+$')
           - recovery_seconds | int >= 60
           - recovery_seconds | int <= 900
+          - recovery_min_root_kib | int >= 131072
+          - recovery_min_tmp_kib | int >= 131072
           - recovery_probe_ip is defined
           - recovery_probe_ip is match('^[0-9.]+$')
           - recovery_probe_name is defined
@@ -66,6 +68,19 @@
       loop: "{{ restore_components }}"
       loop_control:
         loop_var: stack_component
+
+    - name: Validate pinned offline dashboard runtime before router writes
+      ansible.builtin.command:
+        argv:
+          - "{{ controller_python }}"
+          - "{{ playbook_dir }}/../tools/offline_runtime.py"
+          - verify
+          - --root
+          - "{{ playbook_dir }}/.."
+      delegate_to: localhost
+      check_mode: false
+      changed_when: false
+      when: "'device_ui' in restore_components"
 
     - name: Validate all supplied known-good IPKs before router writes
       ansible.builtin.command:
@@ -171,6 +186,15 @@
             FIPS_INITIAL_SCRIPT
             mv /etc/fips-recovery/apply-initial.sh.tmp /etc/fips-recovery/apply-initial.sh
             chmod 0700 /etc/fips-recovery/apply-initial.sh
+            {% if 'device_ui' in restore_components %}
+            decode > /etc/fips-recovery/runtime-packages.tmp <<'FIPS_RUNTIME_PACKAGES'
+            {{ (((lookup('file', playbook_dir + '/../upstream/vendor/runtime.json') | from_json).remove_order | join('\n')) ~ '\n') | b64encode }}
+            FIPS_RUNTIME_PACKAGES
+            {% else %}
+            : > /etc/fips-recovery/runtime-packages.tmp
+            {% endif %}
+            mv /etc/fips-recovery/runtime-packages.tmp /etc/fips-recovery/runtime-packages
+            chmod 0600 /etc/fips-recovery/runtime-packages
             decode > /etc/init.d/fips-recovery.tmp <<'FIPS_INIT_PAYLOAD'
             {{ lookup('file', playbook_dir + '/../packaging/recovery/fips-recovery.init') | b64encode }}
             FIPS_INIT_PAYLOAD
@@ -193,6 +217,11 @@
             {{ recovery_transaction | quote }} {{ recovery_seconds | int }}
           register: recovery_arm
           changed_when: "'ARMED ' in recovery_arm.stdout"
+
+        - name: Install pinned offline dashboard runtime inside the rollback window
+          ansible.builtin.include_role:
+            name: offline_runtime
+          when: "'device_ui' in restore_components"
 
         - name: Install selected packages within the rollback window
           ansible.builtin.include_role:

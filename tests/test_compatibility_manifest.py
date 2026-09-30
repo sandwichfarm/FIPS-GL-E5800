@@ -48,17 +48,31 @@ class CompatibilityManifestTests(unittest.TestCase):
                 manifest_tool.collect(root, target)
 
             (root / EXPECTED["web_ui"]).write_bytes(b"web_ui-candidate")
-            (root / "upstream").mkdir()
+            (root / "upstream/vendor").mkdir(parents=True)
             (root / "upstream/targets.json").write_text(json.dumps(target))
+            runtime_bytes = b"pinned runtime"
+            runtime_name = "python3_1-1_aarch64_cortex-a53.ipk"
+            (root / "runtime").mkdir()
+            (root / "runtime" / runtime_name).write_bytes(runtime_bytes)
+            runtime_record = {"packages": [{"name": "python3", "version": "1-1",
+                                            "filename": runtime_name,
+                                            "sha256": hashlib.sha256(runtime_bytes).hexdigest(),
+                                            "license": "MIT"}]}
+            (root / "upstream/vendor/runtime.json").write_text(json.dumps(runtime_record))
             with patch.object(manifest_tool, "ARTIFACTS", root), patch.object(manifest_tool, "ROOT", root):
                 with patch.object(manifest_tool, "verify", side_effect=ValueError("stale candidate")):
                     with self.assertRaisesRegex(ValueError, "stale candidate"):
                         manifest_tool.emit()
                 self.assertFalse((root / "compatibility.json").exists())
-                with patch.object(manifest_tool, "verify") as verifier:
+                with patch.object(manifest_tool, "verify") as verifier, patch.object(
+                        manifest_tool, "verify_offline_runtime", return_value=runtime_record):
                     manifest_tool.emit()
                     verifier.assert_called_once_with(announce=False)
-            self.assertEqual(json.loads((root / "compatibility.json").read_text()), manifest)
+            emitted = json.loads((root / "compatibility.json").read_text())
+            self.assertEqual(emitted["components"], manifest["components"])
+            self.assertEqual(emitted["offline_runtime"]["package_count"], 1)
+            self.assertEqual(emitted["offline_runtime"]["packages"]["python3"]["sha256"],
+                             hashlib.sha256(runtime_bytes).hexdigest())
             for line in (root / "checksums.sha256").read_text().splitlines():
                 checksum, name = line.split("  ", 1)
                 self.assertEqual(checksum, hashlib.sha256((root / name).read_bytes()).hexdigest())

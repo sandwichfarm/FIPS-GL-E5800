@@ -14,6 +14,7 @@ import yaml
 from ipk import inspect
 from build_provenance import verify_record
 from backup_bundle import read_encrypted, validate_gateway_ipv6_probe
+from offline_runtime import verify as verify_offline_runtime, check_candidate_dependencies
 
 
 PACKAGES = {
@@ -32,6 +33,7 @@ REQUIRED_KIT_FILES = {
     "ansible/inventory/router.yml",
     "ansible/stage_previous.yml", "ansible/vars/defaults.yml",
     "ansible/roles/device_ui/tasks/main.yml", "ansible/roles/fips/tasks/main.yml",
+    "ansible/roles/offline_runtime/tasks/main.yml",
     "ansible/roles/package_restore/tasks/main.yml",
     "ansible/roles/package_validate/tasks/main.yml",
     "ansible/roles/preflight/tasks/main.yml",
@@ -40,11 +42,11 @@ REQUIRED_KIT_FILES = {
     "packaging/recovery/guard.sh", "packaging/recovery/health.sh",
     "packaging/recovery/apply-initial.sh", "packaging/recovery/fips-recovery.init",
     "packaging/device-ui/control/postinst", "packaging/device-ui/control/prerm",
-    "tools/ipk.py", "tools/build_provenance.py", "tools/vendor_pillow.py",
+    "tools/ipk.py", "tools/build_provenance.py", "tools/vendor_pillow.py", "tools/offline_runtime.py",
     "tools/backup_bundle.py", "tools/capture_backup.py", "tools/stage_backup.py",
     "tools/render_backup_restore.py", "private/deploy.yml",
     "private/identity-config-backup.age", "upstream/sources.json",
-    "upstream/targets.json", "upstream/vendor/pillow.json",
+    "upstream/targets.json", "upstream/vendor/pillow.json", "upstream/vendor/runtime.json",
     "upstream/vendor/python3-pillow_9.5.0-2_aarch64_cortex-a53.ipk",
 }
 
@@ -91,6 +93,7 @@ def verify(kit: Path, identity: Path | None = None) -> None:
     selected = profile.get("restore_components")
     if not isinstance(selected, list) or not selected or len(set(selected)) != len(selected):
         raise ValueError("Invalid selected components")
+    runtime_record = verify_offline_runtime(kit) if "device_ui" in selected else None
     if "recovery_backup" in profile:
         recovery = profile["recovery_backup"]
         if (not isinstance(recovery, dict) or recovery.get("path") != "private/identity-config-backup.age"
@@ -152,6 +155,7 @@ def verify(kit: Path, identity: Path | None = None) -> None:
             _, record = vendor_pillow_payload()
             if package_manifest.get("bundled_dependency") != record:
                 raise ValueError("Dashboard bundled Pillow source differs from kit")
+            check_candidate_dependencies(info["depends"], runtime_record)
     for component, item in profile.get("known_good_artifacts", {}).items():
         if component not in PACKAGES or item["path"] != f"previous/{component}.ipk":
             raise ValueError(f"Known-good path is not kit-local: {component}")

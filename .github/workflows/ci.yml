@@ -24,6 +24,8 @@ jobs:
         run: make dev-image
       - name: Install locked web dependencies and validate UI
         run: make web-deps web-build web-test web-browser-test
+      - name: Fetch checksum-pinned offline dashboard runtime
+        run: make vendor-deps
       - name: Validate Python and Ansible logic
         run: make check
       - name: Check Rust formatting and static analysis
@@ -62,6 +64,8 @@ jobs:
           path: |
             artifacts/*.ipk
             artifacts/*.ipk.json
+            artifacts/runtime.json
+            artifacts/runtime/*.ipk
             artifacts/compatibility.json
             artifacts/checksums.sha256
             artifacts/dependencies.json

@@ -7,7 +7,7 @@ NODE_RUN := docker run --rm --user "$(shell id -u):$(shell id -g)" -e HOME=/work
 ANSIBLE_LOCAL_TEMP ?= $(CURDIR)/.cache/ansible-tmp
 export ANSIBLE_LOCAL_TEMP
 
-.PHONY: check dependency-audit inspect inspect-dependencies capture dashboard dev-image rust-check rust-test web-deps web-build web-test web-browser-test web-live-browser-test web-preview web-preview-host web-preview-serve web-preview-host-serve \
+.PHONY: check vendor-deps dependency-audit inspect inspect-dependencies capture dashboard dev-image rust-check rust-test web-deps web-build web-test web-browser-test web-live-browser-test web-preview web-preview-host web-preview-serve web-preview-host-serve \
         lab-build lab-up lab-test lab-down route-lan-test device-preview device-preview-host openwrt-build \
         package-fips package-web package-device
 
@@ -23,6 +23,9 @@ check:
 
 dependency-audit:
 	python3 tools/dependency_audit.py
+
+vendor-deps:
+	python3 tools/offline_runtime.py fetch
 
 inspect:
 	cd ansible && ansible-playbook inspect.yml --ask-pass

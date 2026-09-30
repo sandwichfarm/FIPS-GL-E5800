@@ -34,11 +34,16 @@ unapproved and unverified.
    separately from this repository and the kit. A successful archive check is
    still not a restore rehearsal.
 2. Run `make check`, `make lab-build lab-up lab-test`, `make openwrt-build`,
-   `make package-fips package-web package-device`, and
+   `make package-fips package-web package-device vendor-deps`, and
    `python3 tools/verify_artifacts.py`, and
    `python3 tools/compatibility_manifest.py`. Keep the emitted IPKs, per-package
    provenance, `compatibility.json`, and `checksums.sha256` together. The
    compatibility generator rejects any stale or incomplete candidate stack.
+   The router's 4.10.0 opkg index directory is empty, so the dashboard's 34
+   pinned Python/NumPy and library IPKs must be present in `artifacts/runtime/`.
+   The controller checks their hashes and metadata before any router write.
+   Installation occurs only after the local rollback guard is armed; rollback
+   removes runtime packages absent at the start of the transaction.
 3. Reinspect the firmware with `ansible-playbook ansible/inspect.yml --ask-pass`
    and compare the exact model, architecture, web bundle and screen fingerprints.
    A matching hash identifies the release; it does not establish app compatibility.
@@ -46,6 +51,10 @@ unapproved and unverified.
    package ownership before approving that tuple. Run
    `ansible-playbook ansible/inspect-dependencies.yml --ask-pass` for the
    read-only touchscreen dependency report.
+   The deployment preflight also requires at least 128 MiB free on `/` and
+   128 MiB free on `/tmp` for dependency installation, installer transfer and
+   the router-local rollback. These conservative thresholds can be raised in
+   the private profile; the deployment refuses lower values.
 4. Create ignored `ansible/vars/local.yml` with selected `restore_components`,
    exact `package_artifacts` paths/hashes, `known_good_artifacts` paths/hashes,
    the reviewed `approved_profiles`, `recovery_probe_ip`, and

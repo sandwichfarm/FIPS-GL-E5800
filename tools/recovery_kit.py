@@ -16,6 +16,7 @@ from ipk import inspect
 from backup_bundle import verify_encrypted
 from verify_artifacts import ARTIFACTS, EXPECTED, ROOT, verify as verify_artifact
 from verify_recovery_kit import verify
+from offline_runtime import verify as verify_offline_runtime
 
 
 COPIES = (
@@ -28,6 +29,7 @@ COPIES = (
     "ansible/stage_previous.yml",
     "ansible/inventory/router.yml",
     "ansible/vars/defaults.yml",
+    "upstream/vendor/runtime.json",
     "docs/recovery.md",
     "docs/firmware.md",
     "packaging/recovery/guard.sh",
@@ -37,6 +39,7 @@ COPIES = (
     "packaging/device-ui/control/postinst",
     "packaging/device-ui/control/prerm",
     "tools/ipk.py",
+    "tools/offline_runtime.py",
     "tools/vendor_pillow.py",
     "tools/build_provenance.py",
     "tools/backup_bundle.py",
@@ -105,6 +108,12 @@ def build(profile_path: Path, encrypted_backup: Path, kit_id: str,
         for source in sorted((ROOT / "ansible/roles").glob("*/tasks/*.yml")):
             relative = source.relative_to(ROOT).as_posix()
             records[relative] = verified_copy(source, output / relative)
+        if "device_ui" in profile["restore_components"]:
+            runtime = verify_offline_runtime()
+            for item in runtime["packages"]:
+                source = ROOT / "artifacts/runtime" / item["filename"]
+                relative = "runtime/" + item["filename"]
+                records[relative] = verified_copy(source, output / relative)
         for component in profile["restore_components"]:
             verify_artifact(component, announce=False)
             filename = EXPECTED[component]

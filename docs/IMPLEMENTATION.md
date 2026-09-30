@@ -210,3 +210,12 @@ authorized plan after independent local work is finished.
   unverified. The router currently has no IPv6 default route and LAN RA is
   disabled, so optional LAN gateway activation remains blocked by preflight
   until a separately reviewed IPv6 configuration is available.
+- The router's opkg index directory is empty after the firmware update.
+  Dashboard prerequisites now come from 34 checksum-pinned vendor feed IPKs
+  stored on the controller and copied into each device-capable offline kit.
+  Ansible verifies and installs only missing packages after arming the local
+  rollback guard. The guard snapshots which runtime packages were already
+  installed and removes only newly introduced ones in dependency order on
+  rollback. Read-only router inspection found no file collisions among their
+  1,982 non-directory payload paths. Installation and rollback with real
+  OpenWrt opkg remain unverified until the approved hardware trial.

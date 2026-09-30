@@ -162,6 +162,27 @@ esac
         self.assertEqual(self.state.read_text(), "fips\n")
         self.assertEqual(self.log.read_text(), "remove gl-e5800-dashboard\ninstall fips\n")
 
+    def test_runtime_rollback_removes_only_new_dependencies_in_safe_order(self) -> None:
+        (self.etc / "fips-recovery/runtime-packages").write_text(
+            "python3-numpy\npython3\npython3-light\n"
+        )
+        self.state.write_text("fips\npython3-light\n")
+        self.run_guard("arm", "tx1", "60")
+        self.state.write_text("fips\npython3-light\npython3\npython3-numpy\n")
+        self.run_guard("rollback")
+        self.assertEqual(self.state.read_text(), "fips\npython3-light\n")
+        self.assertEqual(self.log.read_text(),
+                         "remove python3-numpy\nremove python3\ninstall fips\n")
+
+    def test_interrupted_runtime_install_is_removed_after_controller_loss(self) -> None:
+        (self.etc / "fips-recovery/runtime-packages").write_text("python3\n")
+        self.run_guard("arm", "tx1", "60")
+        self.state.write_text("fips\npython3:unpacked\n")
+        expired = self.env | {"FIPS_TEST_NOW": "10061"}
+        self.assertIn("ROLLED_BACK tx1", self.run_guard("check", env=expired))
+        self.assertEqual(self.state.read_text(), "fips\n")
+        self.assertEqual(self.log.read_text(), "remove python3\ninstall fips\n")
+
     def test_partial_package_removal_failure_retries_under_guard(self) -> None:
         self.run_guard("arm", "tx1", "60")
         self.state.write_text("fips\ngl-e5800-dashboard:unpacked\n")
@@ -171,6 +192,18 @@ esac
         self.assertTrue((self.etc / "fips-recovery/pending").exists())
         self.assertIn("ROLLED_BACK tx1", self.run_guard("check", env=expired))
         self.assertEqual(self.state.read_text(), "fips\n")
+
+    def test_runtime_removal_failure_keeps_guard_pending_for_retry(self) -> None:
+        (self.etc / "fips-recovery/runtime-packages").write_text("python3\n")
+        self.run_guard("arm", "tx1", "60")
+        self.state.write_text("fips\npython3:unpacked\n")
+        expired = self.env | {"FIPS_TEST_NOW": "10061"}
+        self.run_guard("check", expected=1,
+                       env=expired | {"FIPS_TEST_OPKG_REMOVE_FAIL": "yes"})
+        self.assertTrue((self.etc / "fips-recovery/pending").exists())
+        self.assertIn("ROLLED_BACK tx1", self.run_guard("check", env=expired))
+        self.assertEqual(self.state.read_text(), "fips\n")
+        self.assertEqual(self.log.read_text(), "remove python3\ninstall fips\n")
 
     def test_confirmation_cancels_rollback(self) -> None:
         self.run_guard("arm", "tx1", "60")

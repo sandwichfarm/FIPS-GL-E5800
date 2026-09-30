@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 
 from verify_artifacts import ARTIFACTS, EXPECTED, ROOT, verify
+from offline_runtime import verify as verify_offline_runtime
 
 
 def digest(path: Path) -> str:
@@ -50,6 +51,21 @@ def emit() -> None:
     verify(announce=False)
     target = json.loads((ROOT / "upstream/targets.json").read_text())
     compatibility, checksums = collect(ARTIFACTS, target)
+    runtime = verify_offline_runtime()
+    runtime_manifest = ROOT / "upstream/vendor/runtime.json"
+    (ARTIFACTS / "runtime.json").write_bytes(runtime_manifest.read_bytes())
+    compatibility["offline_runtime"] = {
+        "file": "runtime.json",
+        "sha256": digest(runtime_manifest),
+        "package_count": len(runtime["packages"]),
+        "packages": {item["name"]: {"file": "runtime/" + item["filename"],
+                                     "version": item["version"], "sha256": item["sha256"],
+                                     "license": item["license"]}
+                     for item in runtime["packages"]},
+    }
+    checksums["runtime.json"] = digest(runtime_manifest)
+    checksums.update({"runtime/" + item["filename"]: item["sha256"]
+                      for item in runtime["packages"]})
     compatibility_path = ARTIFACTS / "compatibility.json"
     compatibility_path.write_text(json.dumps(compatibility, indent=2, sort_keys=True) + "\n")
     checksums[compatibility_path.name] = digest(compatibility_path)

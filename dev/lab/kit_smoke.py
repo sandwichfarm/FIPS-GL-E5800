@@ -107,6 +107,13 @@ def main() -> None:
             relocated = temporary / "relocated" / kit_id
             relocated.parent.mkdir()
             shutil.copytree(kit, relocated)
+            if "device_ui" in components:
+                runtime_installer = temporary / "runtime-install.sh"
+                subprocess.run([sys.executable, "tools/offline_runtime.py", "verify", "--root", "."],
+                               cwd=relocated, check=True)
+                subprocess.run([sys.executable, "tools/offline_runtime.py", "render", "--root", ".",
+                                "--output", str(runtime_installer)], cwd=relocated, check=True)
+                subprocess.run(["sh", "-n", str(runtime_installer)], check=True)
             controller_probe = relocated / "ansible/controller-path-probe.yml"
             controller_probe.write_text(
                 "- hosts: localhost\n"

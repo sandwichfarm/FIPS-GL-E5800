@@ -54,9 +54,11 @@ def verify(component=None, announce=True) -> None:
             verify_record(manifest.get("build_provenance"), actual_payload)
         if selected == "device_ui":
             from vendor_pillow import payload as vendor_pillow_payload
+            from offline_runtime import manifest as runtime_manifest, check_candidate_dependencies
             _, record = vendor_pillow_payload()
             if manifest.get("bundled_dependency") != record:
                 raise ValueError("Bundled Pillow source record is stale")
+            check_candidate_dependencies(info["depends"], runtime_manifest())
         if announce:
             print(f"{selected}: {manifest['sha256']}")
 

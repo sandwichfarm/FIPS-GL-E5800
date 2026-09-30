@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Inventory locked Rust/npm dependencies and reject unreviewed license IDs."""
+"""Inventory locked Rust, npm, and OpenWrt dependencies and their licenses."""
 
 from __future__ import annotations
 
@@ -9,6 +9,9 @@ from pathlib import Path
 import re
 import subprocess
 
+from offline_runtime import verify as verify_offline_runtime
+from vendor_pillow import payload as vendor_pillow_payload
+
 
 ROOT = Path(__file__).resolve().parents[1]
 TARGET = "aarch64-unknown-linux-musl"
@@ -17,7 +20,8 @@ KNOWN_LICENSE_IDS = {
     "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "BSL-1.0", "CC-BY-4.0",
     "CC0-1.0", "CDLA-Permissive-2.0", "GPL-3.0-or-later", "ISC",
     "LLVM-exception", "MIT", "MPL-2.0", "Unicode-3.0", "Unicode-DFS-2016",
-    "Unlicense", "WTFPL", "Zlib",
+    "Unlicense", "WTFPL", "Zlib", "Python-2.0.1", "0BSD",
+    "Public-Domain", "libtiff", "HPND",
 }
 
 
@@ -111,10 +115,21 @@ def audit() -> dict:
             if key in cargo and cargo[key] != item:
                 raise ValueError(f"Conflicting Rust dependency record: {key}")
             cargo[key] = item
+    runtime = verify_offline_runtime()
+    _, pillow = vendor_pillow_payload()
     return {
         "target": TARGET,
         "cargo": [cargo[key] for key in sorted(cargo)],
         "npm": sorted(npm_inventory(), key=lambda item: item["name"]),
+        "openwrt": [
+            {"name": item["name"], "version": item["version"],
+             "license": check_license(item["license"], "openwrt:" + item["name"]),
+             "sha256": item["sha256"], "source": item["source"],
+             "feed": runtime["feeds"][item["feed"]]["url"]}
+            for item in runtime["packages"]
+        ] + [{"name": pillow["package"], "version": pillow["version"],
+              "license": check_license(pillow["license"], "openwrt:python3-pillow"),
+              "sha256": pillow["sha256"], "feed": pillow["url"]}],
     }
 
 
@@ -125,7 +140,7 @@ def main() -> None:
     report = audit()
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
-    print(f"audited {len(report['cargo'])} Cargo and {len(report['npm'])} npm dependencies")
+    print(f"audited {len(report['cargo'])} Cargo, {len(report['npm'])} npm, and {len(report['openwrt'])} OpenWrt dependencies")
 
 
 if __name__ == "__main__":

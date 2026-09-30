@@ -5,3 +5,5 @@ package_artifacts: {}
 controller_python: python3
 known_good_artifacts: {}
 recovery_seconds: 300
+recovery_min_root_kib: 131072
+recovery_min_tmp_kib: 131072
