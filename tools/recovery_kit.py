@@ -48,6 +48,7 @@ COPIES = (
     "tools/compare_backups.py",
     "tools/finalize_stock_rollback.py",
     "tools/router_inventory.py",
+    "tools/switch_mode.py",
     "tools/stage_backup.py",
     "tools/render_backup_restore.py",
     "tools/stage_previous.py",

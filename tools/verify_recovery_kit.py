@@ -46,7 +46,7 @@ REQUIRED_KIT_FILES = {
     "tools/ipk.py", "tools/build_provenance.py", "tools/vendor_pillow.py", "tools/offline_runtime.py",
     "tools/backup_bundle.py", "tools/capture_backup.py", "tools/compare_backups.py",
     "tools/finalize_stock_rollback.py",
-    "tools/router_inventory.py", "tools/stage_backup.py",
+    "tools/router_inventory.py", "tools/switch_mode.py", "tools/stage_backup.py",
     "tools/render_backup_restore.py", "private/deploy.yml",
     "private/identity-config-backup.age", "upstream/sources.json",
     "upstream/targets.json", "upstream/vendor/pillow.json", "upstream/vendor/runtime.json",

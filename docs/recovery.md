@@ -355,6 +355,49 @@ display owner. These flows have local fake-service tests, but no on-device accep
 yet. The optional LAN gateway is not approved for hardware use until routing,
 firewall and client behavior are tested on this model.
 
+## Switching the installed router between operating modes
+
+After an approved and confirmed package installation, the local controller can
+switch between an active FIPS node with the community touchscreen and normal
+stock operation with the original GL.iNet touchscreen. The installed packages,
+FIPS identity, peer list and web extension remain in place in stock operating
+mode. Returning to the exact predeployment package state instead requires the
+guarded package rollback and state comparison above.
+
+Use the dedicated SSH key from the kit; run these commands from the workspace
+or substitute the kit's path to `tools/switch_mode.py`:
+
+```sh
+python3 tools/switch_mode.py --ssh-key private/ssh/gl-e5800_ed25519 status
+python3 tools/switch_mode.py --ssh-key private/ssh/gl-e5800_ed25519 prepare stock
+# Record the returned cfg_... transaction ID. Independently check router admin,
+# a LAN client's ordinary internet/DNS and existing VPN, and router internet/DNS.
+python3 tools/switch_mode.py --ssh-key private/ssh/gl-e5800_ed25519 confirm stock --transaction cfg_REPLACE_ME
+python3 tools/switch_mode.py --ssh-key private/ssh/gl-e5800_ed25519 status
+```
+
+Use `prepare fips` and `confirm fips --transaction cfg_...` to return to FIPS.
+In that direction, also check the node has a live peer link and that normal
+LAN internet, DNS, VPN and router administration remain available. The command
+preserves peer settings and forces `gateway_enabled: false` in both modes. It
+does not install a FIPS-only default route or reconfigure the normal WAN/VPN.
+The router's confirmation health checks management, routing, internet ping,
+DNS and, when enabling FIPS, the daemon/link. Those router checks cannot prove
+LAN-client or VPN behavior; perform the independent checks before `confirm`.
+
+`prepare` arms a 180-second router-local configuration rollback. If a check
+fails, run `rollback --transaction cfg_...` or let the deadline expire; then
+check `status` and the actual network. The touchscreen is switched only after
+the configuration is confirmed. `confirm` verifies the target screen service,
+the other screen is stopped, and, for FIPS, the physical return-button service
+is running. Check the screen itself after confirmation. If display switching
+fails, configuration is already confirmed; the command reports that partial
+state. Retry `screen stock` or `screen fips` after inspecting the service
+failure. A `CONFIG_ALREADY_IN_MODE` result means no configuration transaction
+was needed; `screen stock|fips` can align the display. This controller is
+locally tested only; its first hardware use still requires the owner's explicit
+approval.
+
 The manual GitHub deployment workflow is restricted to `main`, a self-hosted LAN
 runner, and the `hardware` environment. Configure environment reviewers and a
 trusted local `/etc/gl-e5800/deploy.yml`; no router credentials or LAN runner are

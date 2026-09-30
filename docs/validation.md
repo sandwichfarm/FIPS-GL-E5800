@@ -355,3 +355,14 @@ The inventory now also fingerprints the stock web app bundle and touchscreen
 binary. Two read-only v2 inventories on the live router matched, and both
 fingerprints still equal the reviewed 4.10.0 values. A read-only cleanup
 preflight using that inventory again returned `STOCK_ALREADY_CLEAN`.
+
+The FIPS/stock operating-mode controller is now in the offline kit. Its local
+tests cover peer preservation, gateway-off staging, transaction matching,
+confirmation before touchscreen switching, rollback without display changes,
+screen retry checks, and the return-button service. `make check` passes 129
+Python tests plus shell and Ansible syntax checks. A fresh private kit
+`mode_switch_20260930` assembled with the encrypted stock backup and passed
+`verify_recovery_kit.py`. Neither operating-mode transition has been run on the
+GL-E5800. Ordinary LAN internet, DNS, VPN, router administration, FIPS link,
+and physical screen operation must be checked before the first hardware
+confirmation. The controller intentionally keeps LAN gateway mode disabled.

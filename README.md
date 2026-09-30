@@ -61,6 +61,10 @@ decompressed JavaScript is still compiled code, not recovered original source.
 
 Read [recovery instructions](docs/recovery.md) before using the playbooks and
 [firmware observations](docs/firmware.md) for the source availability findings.
+The recovery runbook includes a guarded FIPS/stock operating-mode switch that
+keeps ordinary WAN service and disables the optional LAN gateway. It requires
+independent internet, DNS, VPN, administration and screen checks before
+confirmation; the first on-device use still needs explicit owner approval.
 See [local development](docs/local-development.md) for build, lab, preview, and
 package commands. [Implementation tracker](docs/IMPLEMENTATION.md) lists the
 remaining acceptance gates.
