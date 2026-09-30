@@ -3,19 +3,19 @@
 This workspace builds three separate packages: the FIPS daemon/management binary,
 a GL.iNet web extension, and the community replacement touchscreen dashboard.
 The stock web and touchscreen applications are proprietary captures, not source
-packages. Do not replay their files across firmware versions. This procedure has
-only been tested with local fake-opkg fault tests; hardware deployment remains
-unapproved and unverified.
+packages. Do not replay their files across firmware versions. The rollback,
+encrypted backup, and offline-kit paths have local tests; hardware deployment
+remains unapproved and unverified.
 
 ## Before any deployment
 
 1. Back up the router's `/etc/fips/` identity/configuration, dashboard settings,
-   `/etc/config/{network,firewall,dhcp}`, and the installed known-good IPKs to
+   the complete `/etc/config/` UCI tree, and the installed known-good IPKs to
    encrypted private storage. Verify the backup can be decrypted. Do not commit keys,
    backups, router config, or passwords. Preserve the exact prior IPK and SHA-256
    for every already-installed component; the guard refuses to arm otherwise.
 
-   For a read-only router capture, create and safeguard a local age identity,
+   For an optional read-only backup rehearsal, create and safeguard a local age identity,
    then stream the configuration directly from SSH into encrypted private
    storage. The identity must stay outside Git and outside the recovery kit:
 
@@ -31,8 +31,11 @@ unapproved and unverified.
    installed. The capture refuses a mismatched recipient or a backup directory
    accessible to other users. It verifies the decrypted archive in memory and
    leaves no plaintext file. Use the official age CLI and protect the identity
-   separately from this repository and the kit. A successful archive check is
-   still not a restore rehearsal.
+   separately from this repository and the kit. The live deploy playbook also
+   captures and verifies a fresh encrypted controller backup before its first
+   persistent router write. It refuses an existing backup filename, so each
+   transaction must use a new ID. A successful archive check is still not a
+   restore rehearsal.
 2. Run `make check`, `make lab-build lab-up lab-test`, `make openwrt-build`,
    `make package-fips package-web package-device vendor-deps`, and
    `python3 tools/verify_artifacts.py`, and
@@ -58,7 +61,10 @@ unapproved and unverified.
 4. Create ignored `ansible/vars/local.yml` with selected `restore_components`,
    exact `package_artifacts` paths/hashes, `known_good_artifacts` paths/hashes,
    the reviewed `approved_profiles`, `recovery_probe_ip`, and
-   `recovery_probe_name`. Use a network probe reachable in normal operation.
+   `recovery_probe_name`. Add `predeploy_backup` with the public age recipient,
+   its private identity path, and an absolute mode-0700 controller backup
+   directory. The playbook writes `<directory>/<transaction>.age` before
+   installing the guard. Use a network probe reachable in normal operation.
    Do not store the SSH password; use `--ask-pass` or an authorized key.
 5. Run a read-only dry run:
    `ansible-playbook ansible/deploy.yml --ask-pass --check -e @ansible/vars/local.yml -e recovery_transaction=review1`.
@@ -84,6 +90,10 @@ known_good_artifacts:
   fips: {path: /absolute/path/prior/fips.ipk, sha256: '<SHA-256>'}
 recovery_probe_ip: '1.1.1.1'
 recovery_probe_name: 'example.com'
+predeploy_backup:
+  recipient: 'age1...from-age-keygen-y'
+  identity: '/secure/path/gl-e5800-age-key.txt'
+  directory: '/secure/gl-e5800-backups'
 # Optional for a gateway with working upstream IPv6; choose a public IPv6
 # address that responds to ping from this router.
 # recovery_probe_ipv6: '2606:4700:4700::1111'
@@ -195,6 +205,11 @@ ansible-playbook ansible/deploy.yml --ask-pass -e @ansible/vars/local.yml -e rec
 The playbook installs the guard outside the three replaceable packages, enables
 its early boot service, stages known-good IPKs, backs up live identity and network
 configuration in mode-0700 router storage, then arms a 60–900 second deadline.
+Before those router writes, it captures all current UCI files, FIPS identity and
+configuration when present, and dashboard settings into a verified encrypted
+backup on the controller. The age identity stays outside Git and the offline
+kit. Keep this off-router backup after confirmation: the router-local guard
+automatically rolls back only while its transaction remains pending.
 Only then does it install packages. If selected, it switches the touchscreen
 to the community dashboard while the guard is armed. It checks SSH, `ubus`,
 route, ping, DNS, selected package files, and that the dashboard owns the
@@ -329,7 +344,8 @@ include a vendor firmware image or credentials. Keep it off the router and
 offline. The kit assumes Python, Ansible, SSH and the age CLI are already
 available on the local controller; retain their installers or a tested offline
 controller image separately. Run a real deployment from this kit only after
-separate authorization.
+separate authorization. Set `predeploy_backup.directory` outside the sealed
+kit so a new deployment backup does not invalidate its manifest.
 After a real guarded deployment and independent interface review, run
 `ANSIBLE_CONFIG=ansible/ansible.cfg ansible-playbook ansible/confirm.yml --ask-pass -e @private/deploy.yml -e recovery_transaction=<same-id> -e interface_health_verified=true`
 from the kit directory before the rollback deadline.

@@ -83,6 +83,17 @@ def verify(kit: Path, identity: Path | None = None) -> None:
     profile = yaml.safe_load((kit / "private/deploy.yml").read_text())
     if not isinstance(profile, dict) or not profile.get("approved_profiles"):
         raise ValueError("Reviewed deployment profile is missing")
+    if profile.get("check_only_fixture") is not True:
+        predeploy = profile.get("predeploy_backup")
+        if (not isinstance(predeploy, dict)
+                or not isinstance(predeploy.get("recipient"), str)
+                or not re.fullmatch(r"age1[0-9a-z]+", predeploy["recipient"])
+                or not isinstance(predeploy.get("identity"), str)
+                or not Path(predeploy["identity"]).is_absolute()
+                or not isinstance(predeploy.get("directory"), str)
+                or not Path(predeploy["directory"]).is_absolute()
+                or Path(predeploy["directory"]).resolve().is_relative_to(kit)):
+            raise ValueError("Kit needs a private off-kit backup destination")
     decrypted = None
     if identity is None:
         if profile.get("check_only_fixture") is not True:

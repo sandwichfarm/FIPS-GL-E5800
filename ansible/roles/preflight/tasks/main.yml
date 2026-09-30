@@ -4,6 +4,9 @@
     test -r /etc/glversion
     command -v opkg >/dev/null
     command -v sha256sum >/dev/null
+    command -v tar >/dev/null
+    command -v mktemp >/dev/null
+    command -v openssl >/dev/null
     command -v base64 >/dev/null 2>&1 || command -v openssl >/dev/null
     command -v ln >/dev/null
     command -v readlink >/dev/null

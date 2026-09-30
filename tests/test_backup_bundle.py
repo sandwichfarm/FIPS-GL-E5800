@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import base64
 import io
 import os
 from pathlib import Path
+import shlex
 import shutil
 import subprocess
 import tarfile
@@ -14,7 +16,7 @@ from unittest.mock import patch
 
 from tools.backup_bundle import (inspect_plain, read_plain, require_enabled_fips,
                                  validate_gateway_ipv6_probe, verify_encrypted)
-from tools.capture_backup import capture
+from tools.capture_backup import ROOT as REPOSITORY_ROOT, capture, capture_received
 from tools.stage_backup import stage
 
 
@@ -47,6 +49,9 @@ def archive(files: dict[str, bytes], extra: tarfile.TarInfo | None = None) -> by
 class BackupBundleTests(unittest.TestCase):
     def test_config_and_identity_requirements(self) -> None:
         self.assertEqual(inspect_plain(io.BytesIO(archive(CONFIG)), False), set(CONFIG))
+        complete_uci = CONFIG | {"etc/config/wireless": b"config wifi-device 'radio0'\n",
+                                 "etc/config/vpn": b"config vpn 'main'\n"}
+        self.assertEqual(inspect_plain(io.BytesIO(archive(complete_uci)), False), set(complete_uci))
         self.assertEqual(read_plain(io.BytesIO(archive(CONFIG | IDENTITY)), True), CONFIG | IDENTITY)
         require_enabled_fips(IDENTITY)
         validate_gateway_ipv6_probe(IDENTITY, "")
@@ -71,7 +76,7 @@ class BackupBundleTests(unittest.TestCase):
         link.linkname = "/etc/shadow"
         with self.assertRaisesRegex(ValueError, "link or special"):
             inspect_plain(io.BytesIO(archive(CONFIG, link)), False)
-        for path in ("../etc/config/network", "etc/config/credentials"):
+        for path in ("../etc/config/network", "etc/passwd"):
             with self.subTest(path=path), self.assertRaisesRegex(ValueError, "Unsafe|unexpected"):
                 inspect_plain(io.BytesIO(archive(CONFIG | {path: b"unsafe"})), False)
 
@@ -128,6 +133,75 @@ class BackupBundleTests(unittest.TestCase):
                 self.assertEqual((restored / name).stat().st_mode & 0o777, 0o600)
             with self.assertRaisesRegex(ValueError, "must be new"):
                 stage(captured, identity, restored, True)
+
+    @unittest.skipUnless(shutil.which("age") and shutil.which("age-keygen"), "age CLI unavailable")
+    def test_ansible_stream_creates_verified_private_backup(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            identity = root / "identity.txt"
+            subprocess.run(["age-keygen", "-o", str(identity)], check=True,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            recipient = subprocess.check_output(["age-keygen", "-y", str(identity)], text=True).strip()
+            destination = root / "private/predeploy/tx1.age"
+            files = CONFIG | {"etc/config/wireless": b"config wifi-device 'radio0'\n"} | IDENTITY
+            streamed = b"FIPS_PRESENT=1\n" + base64.b64encode(archive(files)) + b"\n"
+            self.assertEqual(capture_received(streamed, recipient, identity, destination), destination)
+            self.assertEqual(destination.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(destination.parent.stat().st_mode & 0o777, 0o700)
+            self.assertEqual(verify_encrypted(destination, identity, True), set(files))
+            with self.assertRaisesRegex(ValueError, "Choose a new"):
+                capture_received(streamed, recipient, identity, destination)
+            with self.assertRaisesRegex(ValueError, "marker differs"):
+                capture_received(streamed.replace(b"FIPS_PRESENT=1", b"FIPS_PRESENT=0"),
+                                 recipient, identity, root / "private/predeploy/tx2.age")
+            self.assertFalse((root / "private/predeploy/tx2.age").exists())
+            identity.chmod(0o644)
+            with self.assertRaisesRegex(ValueError, "identity file must be private"):
+                capture_received(streamed, recipient, identity,
+                                 root / "private/predeploy/tx3.age")
+            identity.chmod(0o600)
+            with self.assertRaisesRegex(ValueError, "ignored private"):
+                capture_received(streamed, recipient, identity,
+                                 REPOSITORY_ROOT / "docs/unsafe-backup.age")
+
+    def test_encrypted_capture_precedes_any_persistent_router_write(self) -> None:
+        import yaml
+        play = yaml.safe_load((Path(__file__).resolve().parents[1] / "ansible/deploy.yml").read_text())[0]
+        tasks = play["tasks"]
+        backup = next(index for index, task in enumerate(tasks)
+                      if task["name"].startswith("Read the current router configuration"))
+        deployment = next(index for index, task in enumerate(tasks)
+                          if task["name"].startswith("Install with a router-local"))
+        self.assertLess(backup, deployment)
+        self.assertTrue(all(task.get("no_log") is True for task in tasks[backup]["block"]))
+
+    @unittest.skipUnless(shutil.which("openssl"), "OpenSSL unavailable")
+    def test_first_install_capture_reads_all_uci_files_without_fips_identity(self) -> None:
+        import yaml
+        play = yaml.safe_load((Path(__file__).resolve().parents[1] / "ansible/deploy.yml").read_text())[0]
+        block = next(task["block"] for task in play["tasks"]
+                     if task["name"].startswith("Read the current router configuration"))
+        script = block[0]["ansible.builtin.raw"]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for name, content in (CONFIG | {"etc/config/wireless": b"wifi settings\n"}).items():
+                target = root / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(content)
+            script = script.replace("mktemp /tmp/fips-predeploy.XXXXXX",
+                                    f"mktemp {shlex.quote(str(root / 'fips-predeploy.XXXXXX'))}")
+            script = script.replace("/etc/fips", shlex.quote(str(root / "etc/fips")))
+            script = script.replace("/root/dashboard/config.json",
+                                    shlex.quote(str(root / "root/dashboard/config.json")))
+            script = script.replace('tar -czf "$archive" -C / "$@"',
+                                    f'tar -czf "$archive" -C {shlex.quote(str(root))} "$@"')
+            process = subprocess.run(["sh", "-c", script], capture_output=True, check=True,
+                                     env=os.environ | {"COPYFILE_DISABLE": "1"})
+            marker, encoded = process.stdout.split(b"\n", 1)
+            self.assertEqual(marker, b"FIPS_PRESENT=0")
+            self.assertEqual(read_plain(io.BytesIO(base64.b64decode(encoded)), False),
+                             CONFIG | {"etc/config/wireless": b"wifi settings\n"})
+            self.assertEqual(list(root.glob("fips-predeploy.*")), [])
 
 
 if __name__ == "__main__":

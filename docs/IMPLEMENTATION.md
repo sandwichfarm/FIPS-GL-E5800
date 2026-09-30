@@ -219,3 +219,8 @@ authorized plan after independent local work is finished.
   rollback. Read-only router inspection found no file collisions among their
   1,982 non-directory payload paths. Installation and rollback with real
   OpenWrt opkg remain unverified until the approved hardware trial.
+- The deploy play now requires a new, verified age-encrypted controller backup
+  of the complete UCI configuration tree, existing FIPS identity/configuration,
+  and dashboard settings before installing the router-local guard. Tests cover
+  the capture stream and ordering. A real GL-E5800 backup and restoration
+  rehearsal remain unverified until authorized hardware access.

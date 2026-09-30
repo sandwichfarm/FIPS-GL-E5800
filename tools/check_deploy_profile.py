@@ -4,6 +4,7 @@
 import argparse
 import json
 from pathlib import Path
+import re
 
 from verify_artifacts import ARTIFACTS, EXPECTED, verify
 from backup_bundle import read_encrypted, require_enabled_fips, validate_gateway_ipv6_probe
@@ -34,6 +35,16 @@ def main() -> None:
         raise ValueError("No reviewed firmware profile matches the candidate target")
     if not profile.get("recovery_probe_ip") or not profile.get("recovery_probe_name"):
         raise ValueError("Missing independent connectivity probes")
+    if not profile.get("check_only_fixture", False):
+        backup = profile.get("predeploy_backup")
+        if (not isinstance(backup, dict)
+                or not isinstance(backup.get("recipient"), str)
+                or not re.fullmatch(r"age1[0-9a-z]+", backup["recipient"])
+                or not isinstance(backup.get("identity"), str)
+                or not Path(backup["identity"]).is_absolute()
+                or not isinstance(backup.get("directory"), str)
+                or not Path(backup["directory"]).is_absolute()):
+            raise ValueError("A private off-router backup destination is required")
     if "initial_fips_settings" in profile:
         settings = profile["initial_fips_settings"]
         if ("fips" not in profile["restore_components"] or not isinstance(settings, dict)

@@ -286,3 +286,14 @@ from the controller's pinned offline bundle. Its former router-side Python/Pillo
 probe could not pass on the observed fresh 4.10.0 firmware, which has neither
 installed. This dry run remains read-only and does not substitute for guarded
 installation or a hardware acceptance test.
+
+The guarded deploy play now requires a fresh age-encrypted controller backup
+before the first persistent router write. Its capture includes the complete
+`/etc/config/` tree, existing `/etc/fips/` identity/configuration, and dashboard
+settings. It rejects an insecure identity file, a public backup directory,
+invalid or incomplete tar content, and reuse of a transaction's backup path.
+Local tests exercised the actual capture shell against a synthetic router tree,
+age encryption/decryption, first-install and existing-identity cases, and
+backup-before-guard ordering. The Python suite passes 104 tests. No real router
+backup has been captured yet; the hardware trial must verify its contents and
+the recovery path before confirmation.

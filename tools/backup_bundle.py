@@ -56,7 +56,8 @@ def read_plain(stream: io.BufferedIOBase, require_identity: bool) -> dict[str, b
                 raise ValueError("Backup contains a link or special file")
             if name in files:
                 raise ValueError("Duplicate backup file")
-            if name not in REQUIRED_CONFIG | OPTIONAL_FILE and not name.startswith("etc/fips/"):
+            if (name not in OPTIONAL_FILE and not name.startswith("etc/config/")
+                    and not name.startswith("etc/fips/")):
                 raise ValueError("Backup contains an unexpected file")
             if member.size > MAX_FILE or total + member.size > MAX_TOTAL:
                 raise ValueError("Backup file size is unsupported")

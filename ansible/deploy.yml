@@ -150,6 +150,64 @@
       ansible.builtin.include_role:
         name: prerequisites
 
+    - name: Require a private off-router backup destination before router writes
+      ansible.builtin.assert:
+        that:
+          - predeploy_backup is defined
+          - predeploy_backup is mapping
+          - predeploy_backup.recipient | default('') is match('^age1[0-9a-z]+$')
+          - predeploy_backup.identity | default('') is match('^/')
+          - predeploy_backup.directory | default('') is match('^/')
+        fail_msg: Set a private age recipient, identity and absolute backup directory before deployment.
+      when: not ansible_check_mode
+
+    - name: Read the current router configuration into an encrypted controller backup
+      when: not ansible_check_mode
+      block:
+        - name: Capture all UCI configuration, FIPS identity and dashboard settings
+          ansible.builtin.raw: |
+            set -eu
+            umask 077
+            command -v openssl >/dev/null
+            archive=$(mktemp /tmp/fips-predeploy.XXXXXX)
+            trap 'rm -f "$archive"' EXIT
+            set -- etc/config
+            if [ -d /etc/fips ]; then
+              identity_present=1
+              set -- "$@" etc/fips
+            else
+              identity_present=0
+            fi
+            if [ -f /root/dashboard/config.json ]; then
+              set -- "$@" root/dashboard/config.json
+            fi
+            tar -czf "$archive" -C / "$@"
+            tar -tzf "$archive" >/dev/null
+            printf 'FIPS_PRESENT=%s\n' "$identity_present"
+            openssl base64 -A -in "$archive"
+            printf '\n'
+          register: predeploy_capture
+          changed_when: false
+          no_log: true
+
+        - name: Encrypt and verify the off-router backup before any persistent write
+          ansible.builtin.command:
+            argv:
+              - "{{ controller_python }}"
+              - "{{ playbook_dir }}/../tools/capture_backup.py"
+              - --from-stdin
+              - --recipient
+              - "{{ predeploy_backup.recipient }}"
+              - --identity
+              - "{{ predeploy_backup.identity }}"
+              - --output
+              - "{{ predeploy_backup.directory }}/{{ recovery_transaction }}.age"
+            stdin: "{{ predeploy_capture.stdout }}"
+          delegate_to: localhost
+          check_mode: false
+          changed_when: true
+          no_log: true
+
     - name: Show dry-run transaction plan
       ansible.builtin.debug:
         msg: "Would install {{ restore_components | join(', ') }} with rollback transaction {{ recovery_transaction }}; no router writes in check mode."
