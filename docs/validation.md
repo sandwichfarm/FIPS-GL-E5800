@@ -176,3 +176,16 @@ The npm audit reports two inherited Vue 2 issues (one low, one moderate).
 The webpack advisory was removed by pinning webpack 5.105.0. Replacing the
 remaining Vue 2 toolchain requires a separate migration of the community UI
 extension toolkit.
+
+A fresh checkout at `c7fa229` rebuilt the pinned development image, installed
+the locked web dependencies, passed the web unit and Playwright browser checks,
+passed all 93 Python tests, and rebuilt all four ARM64 binaries and all three
+candidate packages. Package SHA-256 values matched the existing workspace
+byte for byte: FIPS `96fd35b0e8f7d8400780e12b33a4c5f2754f24d624ae306ccf65ba54bd7eb962`,
+web `c6dfa3e704773897d168168d987b55cf111cb496931226e9d6f88adff22ee72b`,
+and device `5bd4c9858df3414d592042d2221723fbea760d8f2281bf15ae77f90e9d315a22`.
+Artifact verification, compatibility generation, dependency audit, both
+encrypted offline-kit smoke paths, and the device offline preview passed in
+that checkout. Its two-node Docker lab passed IPv6 mesh ping and recovered
+the same identity and link after a forced node crash. Hosted GitHub CI has
+not run, and no candidate has been installed on the router.

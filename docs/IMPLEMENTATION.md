@@ -7,7 +7,7 @@ authorized plan after independent local work is finished.
 
 ## Acceptance and evidence
 
-- [ ] Reproducible ARM64 packages from pinned sources/toolchains; clean-checkout build.
+- [x] Reproducible ARM64 packages from pinned sources/toolchains; clean-checkout build.
 - [ ] Persistent identity, validated configuration, supervised daemon and health checks.
 - [ ] Dedicated mesh firewall and node are implemented. Optional LAN gateway has a packaged
   procd service, guarded activation, DNS setup and rollback. The former DHCP `route6`
@@ -78,8 +78,10 @@ authorized plan after independent local work is finished.
 - The pinned Rust 1.94.1/Zig 0.13.0 container cross-builds all four static
   ARM64 binaries, including the Router Solicitation handler. All three current
   IPKs pass payload and provenance verification, and the consolidated
-  compatibility manifest is emitted. A clean-checkout hosted CI build remains
-  to be observed.
+  compatibility manifest is emitted. A fresh local checkout reproduced all
+  three IPKs byte for byte, passed the browser and offline-kit checks, and
+  re-established the two-node mesh after a forced node restart. A hosted CI
+  run remains to be observed.
 - The router-local guard and new transactional Ansible playbook are authored.
   Ninety-three Python tests pass locally with no skips, including the age
   encryption round trip and fake-opkg deadline, reboot, checksum, interrupted
