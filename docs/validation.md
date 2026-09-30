@@ -294,6 +294,17 @@ settings. It rejects an insecure identity file, a public backup directory,
 invalid or incomplete tar content, and reuse of a transaction's backup path.
 Local tests exercised the actual capture shell against a synthetic router tree,
 age encryption/decryption, first-install and existing-identity cases, and
-backup-before-guard ordering. The Python suite passes 104 tests. No real router
-backup has been captured yet; the hardware trial must verify its contents and
-the recovery path before confirmation.
+backup-before-guard ordering. The Python suite passes 104 tests.
+
+On 2026-09-30, a dedicated local Ed25519 administration key with fingerprint
+`SHA256:N/oyVdhxyLhGKlMfb+BhUJBa1/yJUnWXEdQmeUAuHqU` was installed in the
+router's `/etc/dropbear/authorized_keys`. A fresh key-only login succeeded
+against firmware 4.10.0. The private key is in ignored `private/ssh/` and is
+not on the router. A read-only capture of the stock router configuration was
+encrypted to ignored `private/predeploy/backups/router-20260930T175806Z.age`;
+the standalone validator decrypted and checked 108 allowed files. That check
+exposed and prompted a fix for stock backups with no FIPS settings. This is a
+verified off-router backup, not a tested restore. The guarded deployment must
+still capture a fresh backup before its first persistent write. Hardware
+rollback, stock/FIPS switching, and normal internet access remain deployment
+gates requiring explicit approval before the trial.

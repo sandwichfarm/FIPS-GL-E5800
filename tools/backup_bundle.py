@@ -131,6 +131,10 @@ def require_enabled_fips(files: dict[str, bytes]) -> None:
 
 
 def validate_gateway_ipv6_probe(files: dict[str, bytes], probe: str) -> None:
+    if "etc/fips/router/settings.json" not in files:
+        if probe:
+            raise ValueError("Gateway IPv6 probe requires FIPS settings")
+        return
     try:
         settings = json.loads(files["etc/fips/router/settings.json"])
     except (KeyError, ValueError, UnicodeDecodeError) as error:

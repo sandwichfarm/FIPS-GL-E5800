@@ -54,6 +54,9 @@ class BackupBundleTests(unittest.TestCase):
         self.assertEqual(inspect_plain(io.BytesIO(archive(complete_uci)), False), set(complete_uci))
         self.assertEqual(read_plain(io.BytesIO(archive(CONFIG | IDENTITY)), True), CONFIG | IDENTITY)
         require_enabled_fips(IDENTITY)
+        validate_gateway_ipv6_probe(CONFIG, "")
+        with self.assertRaisesRegex(ValueError, "requires FIPS settings"):
+            validate_gateway_ipv6_probe(CONFIG, "2606:4700:4700::1111")
         validate_gateway_ipv6_probe(IDENTITY, "")
         gateway = IDENTITY | {"etc/fips/router/settings.json":
                               b'{"enabled":true,"gateway_enabled":true}'}
