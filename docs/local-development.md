@@ -61,7 +61,24 @@ Solicitation with hop limit 255, withdraws the route when the gateway disappears
 and leaves the client's existing default route alone. On kernels built with
 `CONFIG_IPV6_ROUTE_INFO`, it also checks route installation and removal. Docker
 Desktop's LinuxKit kernel lacks that option, so its test reports packet checks
-only; route installation still needs a supported Linux client and hardware test.
+only. With the ARM64 binary from `make openwrt-build`, the same test passed
+route installation, renewal, and withdrawal on Colima 6.8.0-64-generic using
+Alpine 3.20, Python 3.12.13, and iproute2 6.9.0-r0:
+
+```sh
+docker --context colima build -t fips-ra-colima:local - <<'EOF'
+FROM alpine:3.20
+RUN apk add --no-cache python3 iproute2
+EOF
+docker --context colima run --rm --privileged --network none \
+  -e FIPS_RA_BINARY=/workspace/apps/router-admin/target/aarch64-unknown-linux-musl/release/fips-router-admin \
+  -v "$PWD:/workspace:ro" -w /workspace fips-ra-colima:local \
+  python3 dev/lab/route_advertisement.py
+```
+
+This is local Linux evidence; physical clients and VPN coexistence still need
+hardware testing. Hosted CI sets `FIPS_RA_REQUIRE_ROUTE_INFO=1` so the LAN test
+fails if its kernel cannot verify route installation.
 
 ## Interface previews
 
@@ -96,7 +113,7 @@ healthy. Gateway mode requires a reviewed public IPv6 route and ping probe
 saved during deployment. Gateway
 activation requires an existing IPv6 default route and LAN RA service. The
 route-only advertiser has passed packet exchange with an isolated Linux client;
-route installation remains unverified on the current LinuxKit kernel and on
+route installation passed on Colima Linux 6.8 but remains unverified on
 physical LAN clients.
 IPv4-only WAN activation remains gated until client routing and DNS behavior
 are tested; native IPv6 gateway behavior still requires hardware testing.

@@ -6,6 +6,7 @@ Run only inside an isolated, privileged Docker container with --network none.
 
 import ipaddress
 import json
+import os
 import signal
 import socket
 import subprocess
@@ -18,7 +19,9 @@ from pathlib import Path
 NAMESPACE = "fips-ra-client"
 ROUTE = "fd01::/112"
 SOCKET = Path("/run/fips/gateway.sock")
-BINARY = "/workspace/apps/router-admin/target/release/fips-router-admin"
+BINARY = os.environ.get(
+    "FIPS_RA_BINARY", "/workspace/apps/router-admin/target/release/fips-router-admin"
+)
 
 
 def run(*args, namespace=False):
@@ -162,6 +165,8 @@ def main():
             ["ip", "netns", "exec", NAMESPACE, "test", "-e", route_info],
             check=False, capture_output=True,
         ).returncode == 0
+        if not supported and os.environ.get("FIPS_RA_REQUIRE_ROUTE_INFO") == "1":
+            raise AssertionError("kernel lacks CONFIG_IPV6_ROUTE_INFO required by CI")
         if supported:
             run("sysctl", "-qw", "net.ipv6.conf.ra-client.accept_ra_rt_info_max_plen=128", namespace=True)
         observer = start_observer()

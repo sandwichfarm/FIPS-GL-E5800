@@ -33,7 +33,7 @@ candidate packages are built by `tools/package.py` and verified by
 and initial dashboard build. Ninety-four Python tests, including the age CLI
 round trip, and Ansible syntax checks
 pass. Fake OpenWrt gateway lifecycle tests restore DNS/RA and sysctl settings
-after a failed start; LAN client and router hardware behavior are unverified.
+after a failed start; physical LAN client and router hardware behavior are unverified.
 A two-container Linux FIPS mesh connected and passed IPv6 ping after a
 forced node restart while keeping the same identity. Fake-opkg tests exercise
 the new local rollback guard under timeout, reboot, checksum failure, config-only
@@ -81,8 +81,10 @@ tests pass. An isolated Linux client now receives multicast advertisements,
 solicits a unicast reply with hop limit 255, and sees a zero-lifetime withdrawal;
 its default route remains unchanged. That test caught and fixed the sender's
 former unicast hop limit of 64. Docker Desktop's LinuxKit kernel lacks
-`CONFIG_IPV6_ROUTE_INFO`, so Linux route installation and VPN coexistence
-remain unverified. The existing public IPv6 gate still blocks IPv4-only WAN
+`CONFIG_IPV6_ROUTE_INFO`; on Colima's Linux 6.8.0-64-generic kernel the same
+test additionally passed route installation, renewal after solicitation, and
+removal on withdrawal. Physical clients and VPN coexistence remain unverified.
+The existing public IPv6 gate still blocks IPv4-only WAN
 activation until that client path is proven.
 The service and confirmation health now also require a LAN IPv6 /64 before
 starting gateway mode. Fake-router tests reject absent and /128 LAN addresses

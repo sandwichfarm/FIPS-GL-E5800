@@ -89,7 +89,7 @@ lab-test:
 	python3 dev/lab/lifecycle.py
 
 route-lan-test: lab-build
-	docker run --rm --privileged --network none -v "$(CURDIR):/workspace:ro" -w /workspace $(DEV_IMAGE) python3 dev/lab/route_advertisement.py
+	docker run --rm --privileged --network none -e FIPS_RA_REQUIRE_ROUTE_INFO -v "$(CURDIR):/workspace:ro" -w /workspace $(DEV_IMAGE) python3 dev/lab/route_advertisement.py
 
 lab-down:
 	docker compose -f dev/lab/compose.yml down

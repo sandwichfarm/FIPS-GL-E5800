@@ -18,8 +18,9 @@ authorized plan after independent local work is finished.
   Router Solicitation validation, alias lifecycle and missing-instance checks
   have local tests. The Linux sender now replies to valid solicitations; this
   receive path passes an isolated Linux client packet exchange, including
-  unicast hop limit 255 and route withdrawal. LinuxKit lacks
-  `CONFIG_IPV6_ROUTE_INFO`, so route installation remains untested. IPv4-only WAN
+  unicast hop limit 255 and route withdrawal. A separate Colima Linux 6.8 client
+  installed, reinstalled after solicitation, and removed the route while
+  preserving its existing default route. IPv4-only WAN
   activation remains gated on a public IPv6 probe until real LAN client route
   and DNS behavior can be tested. On normal stop, alias removal now waits for
   the procd route instance to exit so the sender can withdraw its route. A
@@ -108,8 +109,8 @@ authorized plan after independent local work is finished.
   target. Gateway activation requires an existing IPv6
   default route and LAN RA service; it no longer forces a default RA or assigns
   a benchmarking prefix. The previous `route6` entry under DHCP was ignored by
-  upstream odhcpd. The packaged route-only advertiser is unverified on a Linux
-  LAN client and IPv4-only WAN activation remains gated. Package and
+  upstream odhcpd. The packaged route-only advertiser passes an isolated Linux
+  LAN client test; IPv4-only WAN activation remains gated. Package and
   later configuration confirmation recheck the target before disarming rollback.
   The confirmation playbook reads the probes staged on the router
   and rejects profile drift.
