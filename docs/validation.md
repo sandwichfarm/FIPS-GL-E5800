@@ -199,8 +199,14 @@ the same identity and link after a forced node crash. Hosted GitHub CI has
 not run, and no candidate has been installed on the router.
 The later unicast-hop-limit fix changed the FIPS candidate to
 `a546192757f8f5d6985a9fa028e7c27ddf8c988f812ffcd897b5fa5e1f67c0b0`;
-its pinned ARM64 build and artifact verification passed locally. The clean
-checkout comparison above predates that fix.
+its pinned ARM64 build and artifact verification passed locally. A second
+clean checkout at `6ae9b0a` installed the locked web dependencies, passed the
+web unit and Playwright browser tests, rebuilt all four ARM64 binaries, and
+packaged all three candidates. Byte comparisons against the workspace IPKs
+passed: FIPS `a546192757f8f5d6985a9fa028e7c27ddf8c988f812ffcd897b5fa5e1f67c0b0`,
+web `c6dfa3e704773897d168168d987b55cf111cb496931226e9d6f88adff22ee72b`,
+and device `5bd4c9858df3414d592042d2221723fbea760d8f2281bf15ae77f90e9d315a22`.
+Artifact verification and compatibility generation passed in that checkout.
 
 A second isolated checkout at `8181176` passed 94 Python tests, the locked web
 build and unit tests, synthetic and live-lab Playwright checks, the two-node
