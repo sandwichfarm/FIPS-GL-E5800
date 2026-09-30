@@ -5,9 +5,14 @@ from __future__ import annotations
 import hashlib
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
+import time
 import unittest
+from unittest.mock import patch
+
+from tools.render_backup_restore import render
 
 
 GUARD = Path(__file__).resolve().parents[1] / "packaging/recovery/guard.sh"
@@ -34,32 +39,62 @@ class RecoveryTest(unittest.TestCase):
         firewall = self.etc / "init.d/firewall"
         firewall.write_text("#!/bin/sh\nexit 0\n")
         firewall.chmod(0o755)
+        stock_screen = self.etc / "init.d/gl_screen"
+        stock_screen.write_text(
+            '#!/bin/sh\n'
+            'if [ "$1" = start ] && [ "${FIPS_TEST_STOCK_FAIL:-}" = yes ]; then exit 1; fi\n'
+            'exit 0\n'
+        )
+        stock_screen.chmod(0o755)
         opkg = self.root / "fake-bin/opkg"
         opkg.write_text("""#!/bin/sh
 case "$1" in
   status)
-    grep -qx "$2" "$FIPS_TEST_OPKG_STATE" || exit 0
-    printf 'Package: %s\\nVersion: 1\\nStatus: install user installed\\n' "$2"
+    if grep -qx "$2" "$FIPS_TEST_OPKG_STATE"; then
+      state=installed
+    elif grep -qx "$2:unpacked" "$FIPS_TEST_OPKG_STATE"; then
+      state=unpacked
+    else
+      exit 0
+    fi
+    printf 'Package: %s\\nVersion: 1\\nStatus: install user %s\\n' "$2" "$state"
     ;;
   remove)
+    [ "${FIPS_TEST_OPKG_REMOVE_FAIL:-}" != yes ] || exit 1
     printf 'remove %s\\n' "$2" >> "$FIPS_TEST_OPKG_LOG"
-    grep -vx "$2" "$FIPS_TEST_OPKG_STATE" > "$FIPS_TEST_OPKG_STATE.tmp" || true
+    awk -v name="$2" '$0 != name && $0 != name ":unpacked"' "$FIPS_TEST_OPKG_STATE" > "$FIPS_TEST_OPKG_STATE.tmp"
     mv "$FIPS_TEST_OPKG_STATE.tmp" "$FIPS_TEST_OPKG_STATE"
     ;;
   install)
     [ "$2" = --force-downgrade ] || exit 2
     name=$(basename "$3" .ipk)
     printf 'install %s\\n' "$name" >> "$FIPS_TEST_OPKG_LOG"
+    [ -z "${FIPS_TEST_OPKG_INSTALL_DELAY:-}" ] || sleep "$FIPS_TEST_OPKG_INSTALL_DELAY"
     grep -qx "$name" "$FIPS_TEST_OPKG_STATE" || echo "$name" >> "$FIPS_TEST_OPKG_STATE"
+    if [ "${FIPS_TEST_OPKG_MUTATE_CONFIG:-}" = yes ]; then
+      echo 'postinst changed network' > "$FIPS_TEST_FS_ROOT/etc/config/network"
+    fi
     ;;
   *) exit 2;;
 esac
 """)
         opkg.chmod(0o755)
+        uci = self.root / "fake-bin/uci"
+        uci.write_text("""#!/bin/sh
+[ "$1" = -q ] || exit 2
+case "$2" in
+  changes) [ ! -f "$FIPS_TEST_UCI_DIR/$3.delta" ] || cat "$FIPS_TEST_UCI_DIR/$3.delta" ;;
+  revert) rm -f "$FIPS_TEST_UCI_DIR/$3.delta" ;;
+  *) exit 2 ;;
+esac
+""")
+        uci.chmod(0o755)
+        (self.root / "uci-deltas").mkdir()
         self.env = os.environ | {
             "FIPS_TEST_FS_ROOT": str(self.root),
             "FIPS_TEST_OPKG_STATE": str(self.state),
             "FIPS_TEST_OPKG_LOG": str(self.log),
+            "FIPS_TEST_UCI_DIR": str(self.root / "uci-deltas"),
             "FIPS_TEST_NOW": "10000",
             "FIPS_TEST_UPTIME": "100",
             "FIPS_TEST_BOOT_ID": "boot-a",
@@ -89,7 +124,8 @@ esac
         (self.etc / "config/network").write_text("bad network")
         (self.etc / "config/firewall").write_text("new firewall")
         self.state.write_text("fips\ngl-sdk4-ui-fips\n")
-        expired = self.env | {"FIPS_TEST_NOW": "10061", "FIPS_TEST_UPTIME": "161"}
+        expired = self.env | {"FIPS_TEST_NOW": "10061", "FIPS_TEST_UPTIME": "161",
+                              "FIPS_TEST_OPKG_MUTATE_CONFIG": "yes"}
         self.assertIn("ROLLED_BACK tx1", self.run_guard("check", env=expired))
         self.assertEqual((self.etc / "fips/identity.key").read_text(), "original identity")
         self.assertEqual((self.etc / "config/network").read_text(), "original network")
@@ -104,6 +140,38 @@ esac
         rebooted = self.env | {"FIPS_TEST_BOOT_ID": "boot-b", "FIPS_TEST_UPTIME": "1"}
         self.assertIn("ROLLED_BACK tx1", self.run_guard("check", env=rebooted))
 
+    def test_interrupted_install_rolls_back_without_controller(self) -> None:
+        self.run_guard("arm", "tx1", "60")
+        # Simulate controller loss after removing FIPS and installing only the dashboard.
+        self.state.write_text("gl-e5800-dashboard\n")
+        (self.etc / "fips/identity.key").write_text("interrupted install")
+        expired = self.env | {"FIPS_TEST_NOW": "10061"}
+        self.assertIn("ROLLED_BACK tx1", self.run_guard("check", env=expired))
+        self.assertEqual(self.state.read_text(), "fips\n")
+        self.assertEqual((self.etc / "fips/identity.key").read_text(), "original identity")
+        self.assertEqual(self.log.read_text(), "remove gl-e5800-dashboard\ninstall fips\n")
+        self.assertEqual(self.run_guard("check", env=expired), "")
+        self.run_guard("rollback", expected=1)
+        self.assertEqual(self.log.read_text(), "remove gl-e5800-dashboard\ninstall fips\n")
+
+    def test_partially_unpacked_new_package_is_removed(self) -> None:
+        self.run_guard("arm", "tx1", "60")
+        self.state.write_text("fips\ngl-e5800-dashboard:unpacked\n")
+        expired = self.env | {"FIPS_TEST_NOW": "10061"}
+        self.assertIn("ROLLED_BACK tx1", self.run_guard("check", env=expired))
+        self.assertEqual(self.state.read_text(), "fips\n")
+        self.assertEqual(self.log.read_text(), "remove gl-e5800-dashboard\ninstall fips\n")
+
+    def test_partial_package_removal_failure_retries_under_guard(self) -> None:
+        self.run_guard("arm", "tx1", "60")
+        self.state.write_text("fips\ngl-e5800-dashboard:unpacked\n")
+        expired = self.env | {"FIPS_TEST_NOW": "10061"}
+        failed = expired | {"FIPS_TEST_OPKG_REMOVE_FAIL": "yes"}
+        self.run_guard("check", expected=1, env=failed)
+        self.assertTrue((self.etc / "fips-recovery/pending").exists())
+        self.assertIn("ROLLED_BACK tx1", self.run_guard("check", env=expired))
+        self.assertEqual(self.state.read_text(), "fips\n")
+
     def test_confirmation_cancels_rollback(self) -> None:
         self.run_guard("arm", "tx1", "60")
         self.run_guard("confirm", "wrong", expected=1)
@@ -111,6 +179,87 @@ esac
         expired = self.env | {"FIPS_TEST_NOW": "10061"}
         self.assertEqual(self.run_guard("check", env=expired), "")
         self.assertEqual((self.etc / "fips-recovery/tx1/result").read_text(), "CONFIRMED tx1\n")
+
+    def test_expired_confirmation_keeps_rollback_pending(self) -> None:
+        self.run_guard("arm", "tx1", "60")
+        expired = self.env | {"FIPS_TEST_NOW": "10060"}
+        self.run_guard("confirm", "tx1", expected=1, env=expired)
+        self.assertTrue((self.etc / "fips-recovery/pending").exists())
+        self.assertFalse((self.etc / "fips-recovery/tx1/result").exists())
+        self.assertIn("ROLLED_BACK tx1", self.run_guard("check", env=expired))
+
+    def test_rebooted_confirmation_keeps_rollback_pending(self) -> None:
+        self.run_guard("arm", "tx1", "60")
+        rebooted = self.env | {"FIPS_TEST_BOOT_ID": "boot-b", "FIPS_TEST_UPTIME": "1"}
+        self.run_guard("confirm", "tx1", expected=1, env=rebooted)
+        self.assertTrue((self.etc / "fips-recovery/pending").exists())
+        self.assertIn("ROLLED_BACK tx1", self.run_guard("check", env=rebooted))
+
+    def test_uptime_deadline_blocks_confirmation_after_clock_rollback(self) -> None:
+        self.run_guard("arm", "tx1", "60")
+        expired = self.env | {"FIPS_TEST_NOW": "9000", "FIPS_TEST_UPTIME": "160"}
+        self.run_guard("confirm", "tx1", expected=1, env=expired)
+        self.assertTrue((self.etc / "fips-recovery/pending").exists())
+        self.assertIn("ROLLED_BACK tx1", self.run_guard("check", env=expired))
+
+    def test_invalid_pending_deadline_cannot_be_confirmed(self) -> None:
+        self.run_guard("arm", "tx1", "60")
+        (self.etc / "fips-recovery/pending").write_text("tx1 invalid 160 boot-a\n")
+        self.run_guard("confirm", "tx1", expected=1)
+        self.assertTrue((self.etc / "fips-recovery/pending").exists())
+
+    def test_confirmation_cannot_race_active_rollback(self) -> None:
+        self.run_guard("arm", "tx1", "60")
+        process = subprocess.Popen(
+            ["sh", str(GUARD), "rollback"],
+            env=self.env | {"FIPS_TEST_OPKG_INSTALL_DELAY": "2"},
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        try:
+            deadline = time.monotonic() + 5
+            while not self.log.exists() and time.monotonic() < deadline:
+                time.sleep(0.02)
+            self.assertTrue(self.log.exists(), "rollback never reached package restore")
+            self.run_guard("confirm", "tx1", expected=1)
+            output, error = process.communicate(timeout=5)
+            self.assertEqual(process.returncode, 0, output + error)
+            self.assertIn("ROLLED_BACK tx1", output)
+            self.assertFalse((self.etc / "fips-recovery/pending").exists())
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.communicate()
+
+    def test_watchdog_recovers_stale_lock_and_rolls_back(self) -> None:
+        self.run_guard("arm", "tx1", "60")
+        lock = self.root / "tmp/fips-recovery/guard.lock"
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        lock.symlink_to("99999999")
+        expired = self.env | {"FIPS_TEST_NOW": "10061"}
+        process = subprocess.Popen(
+            ["sh", str(GUARD), "watch"], env=expired,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        try:
+            deadline = time.monotonic() + 5
+            while (self.etc / "fips-recovery/pending").exists() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertFalse((self.etc / "fips-recovery/pending").exists())
+            self.assertEqual((self.etc / "fips-recovery/tx1/result").read_text(),
+                             "ROLLED_BACK tx1\n")
+        finally:
+            process.terminate()
+            try:
+                process.communicate(timeout=3)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.communicate()
+
+    def test_symlinked_lock_directory_blocks_arming(self) -> None:
+        (self.root / "tmp").mkdir()
+        (self.root / "tmp/fips-recovery").symlink_to(self.etc / "fips-recovery")
+        self.run_guard("arm", "tx1", "60", expected=1)
+        self.assertFalse((self.etc / "fips-recovery/pending").exists())
 
     def test_checksum_mismatch_blocks_arming(self) -> None:
         (self.etc / "fips-recovery/tx1/previous/fips.ipk").write_bytes(b"tampered")
@@ -121,6 +270,147 @@ esac
         (self.etc / "fips-recovery/tx1/previous/fips.version").write_text("2\n")
         self.run_guard("arm", "tx1", "60", expected=1)
         self.assertFalse((self.etc / "fips-recovery/pending").exists())
+
+    def test_config_only_restores_settings_without_reinstalling_packages(self) -> None:
+        dashboard = self.root / "root/dashboard"
+        dashboard.mkdir(parents=True)
+        toggle = dashboard / "toggle.sh"
+        toggle.write_text("#!/bin/sh\necho \"$1\" >> \"$FIPS_TEST_TOGGLE_LOG\"\n")
+        toggle.chmod(0o755)
+        self.env["FIPS_TEST_TOGGLE_LOG"] = str(self.root / "toggle.log")
+        for name in ("citydash", "gl_screen"):
+            display_service = self.etc / "init.d" / name
+            display_service.write_text(
+                '#!/bin/sh\necho "' + name + ' $1" >> "$FIPS_TEST_DISPLAY_LOG"\n'
+            )
+            display_service.chmod(0o755)
+        self.env["FIPS_TEST_DISPLAY_LOG"] = str(self.root / "display.log")
+        (self.etc / "fips-recovery/tx1/previous/fips.ipk").unlink()
+        self.run_guard("arm", "tx1", "60", "config_only")
+        (self.etc / "fips/identity.key").write_text("new identity")
+        (self.etc / "fips/new-config").write_text("new")
+        (self.etc / "config/network").write_text("new network")
+        expired = self.env | {"FIPS_TEST_UPTIME": "161"}
+        self.assertIn("ROLLED_BACK tx1", self.run_guard("check", env=expired))
+        self.assertEqual((self.etc / "fips/identity.key").read_text(), "original identity")
+        self.assertFalse((self.etc / "fips/new-config").exists())
+        self.assertEqual((self.etc / "config/network").read_text(), "original network")
+        self.assertFalse(self.log.exists())
+        self.assertFalse((self.root / "toggle.log").exists())
+        self.assertFalse((self.root / "display.log").exists())
+
+    def test_package_rollback_returns_to_stock_display(self) -> None:
+        dashboard = self.root / "root/dashboard"
+        dashboard.mkdir(parents=True)
+        toggle = dashboard / "toggle.sh"
+        toggle.write_text("#!/bin/sh\necho \"$1\" >> \"$FIPS_TEST_TOGGLE_LOG\"\n")
+        toggle.chmod(0o755)
+        self.env["FIPS_TEST_TOGGLE_LOG"] = str(self.root / "toggle.log")
+        self.run_guard("arm", "tx1", "60")
+        self.run_guard("rollback")
+        self.assertEqual((self.root / "toggle.log").read_text().splitlines(), ["off", "off"])
+
+    def test_stock_screen_start_failure_keeps_rollback_pending_for_retry(self) -> None:
+        self.run_guard("arm", "tx1", "60")
+        expired = self.env | {"FIPS_TEST_NOW": "10061"}
+        self.run_guard("check", expected=1, env=expired | {"FIPS_TEST_STOCK_FAIL": "yes"})
+        self.assertTrue((self.etc / "fips-recovery/pending").exists())
+        self.assertFalse((self.etc / "fips-recovery/tx1/result").exists())
+        self.assertIn("ROLLED_BACK tx1", self.run_guard("check", env=expired))
+        self.assertFalse((self.etc / "fips-recovery/pending").exists())
+
+    def test_config_rollback_reloads_previous_firewall_and_service(self) -> None:
+        fips_init = self.etc / "init.d/fips"
+        fips_init.write_text(
+            "#!/bin/sh\n"
+            "case \"$1\" in enabled) exit 0;; esac\n"
+            "echo \"$1\" >> \"$FIPS_TEST_SERVICE_LOG\"\n"
+        )
+        fips_init.chmod(0o755)
+        nft = self.root / "fake-bin/nft"
+        nft.write_text("#!/bin/sh\necho \"$*\" >> \"$FIPS_TEST_NFT_LOG\"\n")
+        nft.chmod(0o755)
+        jsonfilter = self.root / "fake-bin/jsonfilter"
+        jsonfilter.write_text("#!/bin/sh\necho true\n")
+        jsonfilter.chmod(0o755)
+        self.env["FIPS_TEST_NFT_LOG"] = str(self.root / "nft.log")
+        self.env["FIPS_TEST_SERVICE_LOG"] = str(self.root / "service.log")
+        router = self.etc / "fips/router"
+        router.mkdir()
+        (router / "settings.json").write_text('{"enabled":true}\n')
+        (router / "mesh.nft").write_text("table inet fips { chain old {} }\n")
+        self.run_guard("arm", "tx1", "60", "config_only")
+        (router / "settings.json").write_text('{"enabled":false}\n')
+        (router / "mesh.nft").write_text("new rules")
+        expired = self.env | {"FIPS_TEST_NOW": "10061"}
+        self.run_guard("check", env=expired)
+        self.assertEqual((router / "settings.json").read_text(), '{"enabled":true}\n')
+        self.assertEqual((router / "mesh.nft").read_text(), "table inet fips { chain old {} }\n")
+        self.assertIn("delete table inet fips", (self.root / "nft.log").read_text())
+        self.assertIn("-f ", (self.root / "nft.log").read_text())
+        self.assertIn("restart", (self.root / "service.log").read_text())
+
+    def test_rollback_discards_uncommitted_uci_network_changes(self) -> None:
+        self.run_guard("arm", "tx1", "60", "config_only")
+        for name in ("network", "dhcp", "firewall"):
+            (self.root / "uci-deltas" / f"{name}.delta").write_text(
+                f"set {name}.fips_test=unsafe\n"
+            )
+        self.run_guard("rollback")
+        self.assertEqual(list((self.root / "uci-deltas").iterdir()), [])
+        self.assertEqual((self.etc / "config/network").read_text(), "original network")
+
+    def test_config_rollback_restores_prior_gateway_service_state(self) -> None:
+        gateway = self.etc / "init.d/fips-gateway"
+        gateway.write_text(
+            '#!/bin/sh\n'
+            'case "$1" in enabled) exit 0;; esac\n'
+            'echo "$1" >> "$FIPS_TEST_GATEWAY_LOG"\n'
+        )
+        gateway.chmod(0o755)
+        self.env["FIPS_TEST_GATEWAY_LOG"] = str(self.root / "gateway.log")
+        self.run_guard("arm", "tx1", "60", "config_only")
+        self.assertEqual((self.etc / "fips-recovery/tx1/backup/gateway-service").read_text(),
+                         "enabled\n")
+        expired = self.env | {"FIPS_TEST_NOW": "10061"}
+        self.run_guard("check", env=expired)
+        self.assertEqual((self.root / "gateway.log").read_text().splitlines(),
+                         ["stop", "enable", "restart"])
+
+    def test_controller_loss_rolls_back_post_firmware_identity_restore(self) -> None:
+        # Model a firmware update that left no installed FIPS package or identity.
+        self.state.write_text("")
+        shutil.rmtree(self.etc / "fips")
+        fips_init = self.etc / "init.d/fips"
+        fips_init.write_text("#!/bin/sh\nexit 0\n")
+        fips_init.chmod(0o755)
+        self.run_guard("arm", "tx1", "60")
+
+        restored = {
+            "etc/config/network": b"old firmware network",
+            "etc/config/firewall": b"old firmware firewall",
+            "etc/config/dhcp": b"old firmware dhcp",
+            "etc/fips/fips.key": b"prior private identity",
+            "etc/fips/fips.yaml": b"prior daemon config",
+            "etc/fips/router/settings.json": b'{"enabled":true}',
+            "etc/fips/router/mesh.nft": b"table inet fips {}",
+        }
+        with patch("tools.render_backup_restore.read_encrypted", return_value=restored):
+            script = render(Path("unused.age"), Path("unused-key"), "tx1")
+        script_path = self.root / "restore.sh"
+        script_path.write_text(script)
+        applied = subprocess.run(["sh", str(script_path)], env=self.env,
+                                 capture_output=True, text=True, check=True)
+        self.assertIn("FIPS_BACKUP_RESTORED", applied.stdout)
+        self.assertEqual((self.etc / "fips/fips.key").read_bytes(), b"prior private identity")
+        self.assertEqual((self.etc / "config/network").read_text(), "original network")
+
+        # No controller confirmation: the boot-persistent guard times out locally.
+        expired = self.env | {"FIPS_TEST_NOW": "10061", "FIPS_TEST_UPTIME": "161"}
+        self.assertIn("ROLLED_BACK tx1", self.run_guard("check", env=expired))
+        self.assertFalse((self.etc / "fips").exists())
+        self.assertEqual((self.etc / "config/network").read_text(), "original network")
+        self.assertEqual((self.etc / "fips-recovery/tx1/result").read_text(), "ROLLED_BACK tx1\n")
 
 
 if __name__ == "__main__":

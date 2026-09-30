@@ -2,12 +2,49 @@
   ansible.builtin.raw: |
     set -eu
     test -c /dev/net/tun
+    test -x /usr/sbin/nft
+    test -x /etc/init.d/firewall
+    command -v uci >/dev/null
+    command -v jsonfilter >/dev/null
+    command -v timeout >/dev/null
     for pkg in kmod-tun kmod-br-netfilter kmod-nft-nat kmod-nf-conntrack ip-full; do
       test "$(opkg status "$pkg" | awk '/^Status:/ {print $4}')" = installed
     done
   changed_when: false
   check_mode: false
   when: "'fips' in restore_components"
+
+- name: Check optional LAN gateway prerequisites before first activation
+  ansible.builtin.raw: |
+    set -eu
+    test -x /etc/init.d/dnsmasq
+    test -x /etc/init.d/odhcpd
+    command -v sysctl >/dev/null
+    command -v modprobe >/dev/null
+    test -r /proc/sys/net/ipv6/conf/all/forwarding
+    test -r /proc/sys/net/ipv6/conf/all/proxy_ndp
+    test -r /proc/sys/kernel/random/boot_id
+    ip -6 addr show dev br-lan >/dev/null
+    ip -6 route show default | grep -q .
+    case "$(uci -q get dhcp.lan.ra)" in server|relay|hybrid) ;; *) exit 1;; esac
+    uci -q get 'dhcp.@dnsmasq[0]' >/dev/null
+  changed_when: false
+  check_mode: false
+  when:
+    - "'fips' in restore_components"
+    - initial_fips_settings is defined
+    - initial_fips_settings.gateway_enabled | default(false) | bool
+
+- name: Check reviewed public IPv6 connectivity before gateway deployment
+  ansible.builtin.raw: |
+    set -eu
+    timeout 2 ip -6 route get {{ recovery_probe_ipv6 | quote }} >/dev/null
+    timeout 4 ping -6 -c 1 -W 3 {{ recovery_probe_ipv6 | quote }} >/dev/null
+  changed_when: false
+  check_mode: false
+  when:
+    - "'fips' in restore_components"
+    - recovery_probe_ipv6 is defined
 
 - name: Check web extension paths
   ansible.builtin.raw: test -d /usr/share/oui/menu.d && test -d /www/views

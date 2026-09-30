@@ -1,7 +1,17 @@
 #!/bin/sh
 set -eu
-# A removed or upgraded dashboard must leave the physical display usable.
-if [ -x /etc/init.d/citydash ] && /etc/init.d/citydash enabled 2>/dev/null; then
-    /root/dashboard/toggle.sh off
+# A partial install may lack toggle.sh. Restore the stock screen using its
+# independent service before the dashboard's files disappear.
+if [ -x /etc/init.d/homebutton ]; then
+    /etc/init.d/homebutton stop >/dev/null 2>&1 || true
+    /etc/init.d/homebutton disable >/dev/null 2>&1 || true
 fi
+if [ -x /etc/init.d/citydash ]; then
+    /etc/init.d/citydash stop >/dev/null 2>&1 || true
+    /etc/init.d/citydash disable >/dev/null 2>&1 || true
+fi
+test -x /etc/init.d/gl_screen
+/etc/init.d/gl_screen enable
+/etc/init.d/gl_screen start
+/etc/init.d/gl_screen status
 exit 0

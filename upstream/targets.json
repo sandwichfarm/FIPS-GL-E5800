@@ -1,0 +1,9 @@
+{
+  "model": "GL-E5800",
+  "firmware": "4.10.0",
+  "openwrt": "23.05.4",
+  "architecture": "aarch64_cortex-a53",
+  "app_sha256": "2194dc7d2be581d79903a3a2555627977bce40ebe8ba7f7f694ec291fce907a7",
+  "screen_sha256": "c1aed1444ab8e516a2471b513fa93f8fe3413eec48e3b569047d655f1fba30fc",
+  "status": "candidate_unverified"
+}

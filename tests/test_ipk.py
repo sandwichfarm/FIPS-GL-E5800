@@ -3,6 +3,7 @@ import importlib.util
 import io
 import os
 import shutil
+import struct
 from pathlib import Path
 import subprocess
 import tarfile
@@ -24,19 +25,41 @@ def archive(files):
     return stream.getvalue()
 
 
+def elf(machine=183):
+    data = bytearray(120)
+    data[:7] = b"\x7fELF\x02\x01\x01"
+    struct.pack_into("<HHI", data, 16, 2, machine, 1)
+    struct.pack_into("<Q", data, 32, 64)
+    struct.pack_into("<HHH", data, 52, 64, 56, 1)
+    struct.pack_into("<I", data, 64, 1)
+    return bytes(data)
+
+
 class PackageTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
         self.addCleanup(self.temp.cleanup)
 
-    def package(self, name="fips", arch="aarch64_cortex-a53", payload="usr/bin/fips"):
+    def package(self, name="fips", arch="aarch64_cortex-a53", payload="usr/bin/fips", machine=183):
         control = f"Package: {name}\nVersion: v0.5.2\nArchitecture: {arch}\n".encode()
         blob = archive({"./debian-binary": b"2.0\n", "./control.tar.gz": archive({
             "./control": control, "./conffiles": b"/etc/fips/fips.yaml\n"}),
-            "./data.tar.gz": archive({payload: b"binary", "etc/fips/fips.yaml": b"config",
+            "./data.tar.gz": archive({payload: elf(machine), "etc/fips/fips.yaml": b"config",
                                         "etc/uci-defaults/90-fips-setup": b"setup"})})
         path = self.root / "test.ipk"
+        path.write_bytes(blob)
+        return path, hashlib.sha256(blob).hexdigest()
+
+    def package_with_payload(self, component, payload):
+        name = ipk.NAMES[component]
+        arch = "aarch64_cortex-a53" if component == "fips" else "all"
+        control = f"Package: {name}\nVersion: 1\nArchitecture: {arch}\n".encode()
+        files = {"usr/bin/fips": elf()} if component == "fips" else {}
+        files[payload] = b"unexpected"
+        blob = archive({"debian-binary": b"2.0\n", "control.tar.gz": archive({"control": control}),
+                        "data.tar.gz": archive(files)})
+        path = self.root / "unexpected.ipk"
         path.write_bytes(blob)
         return path, hashlib.sha256(blob).hexdigest()
 
@@ -63,10 +86,106 @@ class PackageTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "architecture"):
             ipk.inspect(path, digest, "fips")
 
+    def test_wrong_binary_architecture_rejected(self):
+        path, digest = self.package(machine=62)
+        with self.assertRaisesRegex(ValueError, "AArch64 ELF"):
+            ipk.inspect(path, digest, "fips")
+
     def test_path_traversal_rejected(self):
         path, digest = self.package(payload="../../etc/passwd")
         with self.assertRaisesRegex(ValueError, "Unsafe"):
             ipk.inspect(path, digest, "fips")
+
+    def test_stock_web_payload_rejected(self):
+        path, digest = self.package_with_payload("web_ui", "www/views/gl-sdk4-ui-core.js.gz")
+        with self.assertRaisesRegex(ValueError, "outside approved component paths"):
+            ipk.inspect(path, digest, "web_ui")
+
+    def test_stock_touchscreen_payload_rejected(self):
+        path, digest = self.package_with_payload("device_ui", "usr/bin/gl-screen")
+        with self.assertRaisesRegex(ValueError, "outside approved component paths"):
+            ipk.inspect(path, digest, "device_ui")
+
+    def test_identity_key_payload_rejected(self):
+        path, digest = self.package_with_payload("fips", "etc/fips/identity.key")
+        with self.assertRaisesRegex(ValueError, "outside approved component paths"):
+            ipk.inspect(path, digest, "fips")
+
+    def test_candidate_rejects_unreviewed_install_script(self):
+        control = b"Package: gl-sdk4-ui-fips\nVersion: 1\nArchitecture: all\n"
+        blob = archive({"debian-binary": b"2.0\n",
+                        "control.tar.gz": archive({"control": control, "postinst": b"#!/bin/sh\nexit 0\n"}),
+                        "data.tar.gz": archive({"www/cgi-bin/gl-sdk4-ui-fips": b"safe"})})
+        path = self.root / "script.ipk"
+        path.write_bytes(blob)
+        with self.assertRaisesRegex(ValueError, "unexpected control"):
+            ipk.inspect(path, hashlib.sha256(blob).hexdigest(), "web_ui", candidate=True)
+
+    def test_candidate_rejects_changed_touchscreen_script(self):
+        control = b"Package: gl-e5800-dashboard\nVersion: 1\nArchitecture: all\n"
+        blob = archive({"debian-binary": b"2.0\n",
+                        "control.tar.gz": archive({"control": control,
+                                                   "postinst": ipk.DEVICE_CONTROL_SCRIPTS["postinst"].read_bytes(),
+                                                   "prerm": b"#!/bin/sh\nrm -rf /www\n"}),
+                        "data.tar.gz": archive({"root/dashboard/dashboard.py": b"safe"})})
+        path = self.root / "changed-script.ipk"
+        path.write_bytes(blob)
+        with self.assertRaisesRegex(ValueError, "differs from reviewed source: prerm"):
+            ipk.inspect(path, hashlib.sha256(blob).hexdigest(), "device_ui", candidate=True)
+
+    def test_candidate_requires_complete_web_payload(self):
+        control = b"Package: gl-sdk4-ui-fips\nVersion: 1\nArchitecture: all\nDepends: fips\n"
+        blob = archive({
+            "debian-binary": b"2.0\n",
+            "control.tar.gz": archive({"control": control}),
+            "data.tar.gz": archive({
+                "usr/share/oui/menu.d/fips.json": b"{}",
+                "www/cgi-bin/gl-sdk4-ui-fips": b"#!/bin/sh\n",
+            }),
+        })
+        path = self.root / "incomplete-web.ipk"
+        path.write_bytes(blob)
+        with self.assertRaisesRegex(ValueError, "missing runtime files: www/views/gl-sdk4-ui-fips.common.js.gz"):
+            ipk.inspect(path, hashlib.sha256(blob).hexdigest(), "web_ui", candidate=True)
+
+    def test_candidate_requires_declared_dependencies(self):
+        control = b"Package: gl-sdk4-ui-fips\nVersion: 1\nArchitecture: all\n"
+        blob = archive({
+            "debian-binary": b"2.0\n",
+            "control.tar.gz": archive({"control": control}),
+            "data.tar.gz": archive({name: b"payload" for name in ipk.WEB_FILES}),
+        })
+        path = self.root / "no-web-dependency.ipk"
+        path.write_bytes(blob)
+        with self.assertRaisesRegex(ValueError, "missing dependencies: fips"):
+            ipk.inspect(path, hashlib.sha256(blob).hexdigest(), "web_ui", candidate=True)
+
+    def test_touchscreen_candidate_cannot_omit_pillow_dependency(self):
+        control = (b"Package: gl-e5800-dashboard\nVersion: 1\nArchitecture: all\n"
+                   b"Depends: python3, python3-numpy\n")
+        scripts = {name: source.read_bytes() for name, source in ipk.DEVICE_CONTROL_SCRIPTS.items()}
+        blob = archive({
+            "debian-binary": b"2.0\n",
+            "control.tar.gz": archive({"control": control, **scripts}),
+            "data.tar.gz": archive({"root/dashboard/dashboard.py": b"# dashboard\n"}),
+        })
+        path = self.root / "no-pillow-dependency.ipk"
+        path.write_bytes(blob)
+        with self.assertRaisesRegex(ValueError, "missing dependencies: .*python3-pillow"):
+            ipk.inspect(path, hashlib.sha256(blob).hexdigest(), "device_ui", candidate=True)
+
+    def test_fips_candidate_requires_gateway_runtime(self):
+        control = (b"Package: fips\nVersion: 1\nArchitecture: aarch64_cortex-a53\n"
+                   b"Depends: kmod-tun, ip-full\n")
+        blob = archive({
+            "debian-binary": b"2.0\n",
+            "control.tar.gz": archive({"control": control}),
+            "data.tar.gz": archive({"usr/bin/fips": elf()}),
+        })
+        path = self.root / "incomplete-fips.ipk"
+        path.write_bytes(blob)
+        with self.assertRaisesRegex(ValueError, "missing runtime files: .*fips-gateway"):
+            ipk.inspect(path, hashlib.sha256(blob).hexdigest(), "fips", candidate=True)
 
     def run_installer(self, installed, drift=False, user_installed=False, openssl_only=False):
         path, digest = self.package()

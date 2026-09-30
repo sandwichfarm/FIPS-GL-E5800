@@ -1,0 +1,59 @@
+- name: Inspect touchscreen dependency ownership without router writes
+  hosts: routers
+  gather_facts: false
+  vars_files:
+    - vars/defaults.yml
+  roles:
+    - preflight
+  tasks:
+    - name: Read installed package versions and Pillow ownership
+      ansible.builtin.raw: |
+        set -u
+        echo PACKAGE_ARCHITECTURES
+        opkg print-architecture
+        echo INSTALLED_DEPENDENCIES
+        for package in gl-sdk4-screen-large python3 python3-numpy python3-pillow libfreetype libfreetype6 libtiff6 zoneinfo-europe zoneinfo-asia zoneinfo-america zoneinfo-australia-nz zoneinfo-pacific; do
+          printf '%s\n' "PACKAGE $package"
+          opkg status "$package" 2>/dev/null | sed -n '/^Package:/p;/^Version:/p;/^Architecture:/p;/^Status:/p;/^Depends:/p;/^Provides:/p;/^Conflicts:/p;/^Replaces:/p'
+        done
+        echo STOCK_SCREEN_FREETYPE_FILES
+        opkg files gl-sdk4-screen-large 2>/dev/null | sed -n '/freetype/p;/PIL/p'
+        echo INSTALLED_PILLOW_FILES
+        opkg files python3-pillow 2>/dev/null | sed -n '/freetype/p;/PIL/p'
+        echo INSTALLED_FREETYPE_FILES
+        for package in libfreetype libfreetype6; do
+          printf '%s\n' "PACKAGE $package"
+          opkg files "$package" 2>/dev/null | sed -n '/freetype/p'
+        done
+        echo AVAILABLE_PILLOW_METADATA
+        opkg info python3-pillow 2>/dev/null | sed -n '/^Package:/p;/^Version:/p;/^Architecture:/p;/^Depends:/p;/^Provides:/p;/^Conflicts:/p;/^Replaces:/p;/^Filename:/p'
+        echo AVAILABLE_FREETYPE_METADATA
+        for package in libfreetype libfreetype6; do
+          printf '%s\n' "PACKAGE $package"
+          opkg info "$package" 2>/dev/null | sed -n '/^Package:/p;/^Version:/p;/^Architecture:/p;/^Depends:/p;/^Provides:/p;/^Conflicts:/p;/^Replaces:/p;/^Filename:/p'
+        done
+        echo PYTHON_IMPORT_PATHS
+        if command -v python3 >/dev/null 2>&1; then
+          PYTHONDONTWRITEBYTECODE=1 python3 -B - <<'PY'
+        import importlib.util
+        for name in ('PIL', 'PIL.Image', 'PIL._imaging', 'PIL._imagingft', 'numpy'):
+            try:
+                spec = importlib.util.find_spec(name)
+                print(name, spec.origin if spec else 'missing')
+            except (ImportError, AttributeError) as error:
+                print(name, type(error).__name__)
+        try:
+            from PIL import Image, ImageDraw, ImageFont, _imagingft
+            import numpy
+            frame = Image.new('RGB', (16, 16))
+            ImageDraw.Draw(frame).text((0, 0), 'F', font=ImageFont.load_default())
+            print('PIL_RENDER_OK', Image.__version__, numpy.__version__,
+                  _imagingft.freetype2_version)
+        except Exception as error:
+            print('PIL_RENDER_FAILED', type(error).__name__, str(error))
+        PY
+        else
+          echo 'python3 missing'
+        fi
+      changed_when: false
+      check_mode: false

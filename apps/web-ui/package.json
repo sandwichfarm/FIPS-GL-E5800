@@ -4,17 +4,24 @@
   "private": true,
   "scripts": {
     "build": "webpack --config webpack.config.cjs",
+    "preview-build": "webpack --config webpack.preview.cjs",
     "watch": "webpack --config webpack.config.cjs --watch",
-    "test": "node --test test/*.test.cjs"
+    "test": "node --test test/*.test.cjs",
+    "test:browser": "node test/browser.cjs"
   },
   "devDependencies": {
+    "css-loader": "6.11.0",
+    "playwright": "1.63.0",
     "vue": "2.7.16",
-    "vue-template-compiler": "2.7.16",
     "vue-loader": "15.11.1",
     "vue-style-loader": "4.1.3",
-    "css-loader": "6.11.0",
-    "webpack": "5.101.3",
+    "vue-template-compiler": "2.7.16",
+    "webpack": "5.105.0",
     "webpack-cli": "5.1.4"
   },
-  "overrides": {"@vue/component-compiler-utils": {"postcss": "8.5.23"}}
+  "overrides": {
+    "@vue/component-compiler-utils": {
+      "postcss": "8.5.23"
+    }
+  }
 }

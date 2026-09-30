@@ -16,19 +16,24 @@ def main():
     parser.add_argument("--socket", type=Path)
     parser.add_argument("--state-dir", type=Path)
     args = parser.parse_args()
-    source = Path("/workspace/.cache/generated-device-ui/dashboard.py")
+    project_root = Path(__file__).resolve().parents[2]
+    source = project_root / ".cache/generated-device-ui/dashboard.py"
     spec = importlib.util.spec_from_file_location("dashboard", source)
     dashboard = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(dashboard)
-    dashboard.font = lambda name, size: ImageFont.truetype(
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", size)
+    preview_font = next((path for path in (
+        Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+        Path("/System/Library/Fonts/Supplemental/Arial.ttf"),
+    ) if path.exists()), None)
+    dashboard.font = lambda name, size: (ImageFont.truetype(str(preview_font), size)
+                                         if preview_font else ImageFont.load_default(size=size))
     if args.socket:
         if not args.state_dir:
             parser.error("--state-dir is required with --socket")
 
         def request(operation, **fields):
             result = subprocess.run([
-                "/workspace/apps/router-admin/target/release/fips-router-admin",
+                str(project_root / "apps/router-admin/target/release/fips-router-admin"),
                 "--state-dir", str(args.state_dir), "--socket", str(args.socket)],
                 input=json.dumps({"operation": operation, **fields}), text=True,
                 capture_output=True, timeout=4, check=False)

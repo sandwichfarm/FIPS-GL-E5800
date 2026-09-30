@@ -3,10 +3,19 @@
     <header><h1>FIPS</h1><button :disabled="busy" @click="refresh">Refresh</button></header>
     <p v-if="error" role="alert" class="error">{{ error }}</p>
     <p v-if="notice" role="status">{{ notice }}</p>
+    <section v-if="pendingTx" class="card pending" role="alert">
+      <h2>{{ pendingMode === 'packages' ? 'Package deployment pending' : 'Change awaiting confirmation' }}</h2>
+      <p v-if="pendingMode === 'packages'">Check normal networking, this page, and the touchscreen. Confirm from the local controller before the rollback deadline.</p>
+      <p v-else>Check that normal networking and this admin page still work. If you cannot confirm within 3 minutes, the router rolls back automatically.</p>
+      <template v-if="pendingMode === 'config_only'">
+        <button :disabled="busy" @click="confirmChange">Keep changes</button>
+        <button :disabled="busy" @click="rollbackChange">Roll back now</button>
+      </template>
+    </section>
     <section class="card">
       <h2>Node</h2>
       <dl>
-        <dt>Status</dt><dd>{{ status.state || 'Loading' }}</dd>
+        <dt>Status</dt><dd>{{ status.state || (error ? 'Unavailable' : 'Loading') }}</dd>
         <dt>Public identity</dt><dd class="identity">{{ status.npub || 'Unavailable while stopped' }}</dd>
         <dt>IPv6 address</dt><dd>{{ status.ipv6_addr || '—' }}</dd>
         <dt>Peers</dt><dd>{{ status.peer_count == null ? '—' : status.peer_count }}</dd>
@@ -15,7 +24,7 @@
     </section>
     <section class="card">
       <h2>Connected peers</h2>
-      <p v-if="!peers.length">No connected peers.</p>
+      <p v-if="!peers.length">{{ error ? 'Peer status unavailable.' : 'No connected peers.' }}</p>
       <ul><li v-for="peer in peers" :key="peer.npub">
         <span class="identity">{{ peer.display_name || peer.npub }}</span>
         — {{ peer.connectivity }} · {{ peer.transport_type }}
@@ -41,7 +50,10 @@
       <p class="hint">Only listed service ports are permitted. Empty lists keep inbound services closed.</p>
       <label>TCP ports <input v-model="tcpPorts" placeholder="Comma-separated ports"></label>
       <label>UDP ports <input v-model="udpPorts" placeholder="Comma-separated ports"></label>
-      <footer><button :disabled="busy" type="submit">Validate and stage</button></footer>
+      <footer>
+        <button :disabled="busy || !!pendingTx" type="submit">Validate and stage</button>
+        <button :disabled="busy || !stagedRevision || !!pendingTx" type="button" @click="activate">Apply staged changes</button>
+      </footer>
     </form>
     <section class="card"><h2>Diagnostics</h2>
       <button :disabled="busy" @click="diagnose">Check node health</button>
@@ -56,19 +68,27 @@ const { createApi } = require('./api.cjs');
 export default {
   name: 'FipsPanel',
   data() {
-    return { status: {}, peers: [], settings: null, revision: '', tcpPorts: '', udpPorts: '',
-      error: '', notice: '', diagnostics: '', busy: false };
+    return { status: {}, peers: [], settings: null, revision: '', stagedRevision: '',
+      pendingTx: '', pendingMode: '', tcpPorts: '', udpPorts: '', error: '', notice: '', diagnostics: '', busy: false };
   },
   created() { this.request = createApi(); this.refresh(); },
   methods: {
     async refresh() {
       this.busy = true; this.error = '';
       try {
-        const [status, configuration] = await Promise.all([this.request('status'), this.request('configuration')]);
+        const [status, configuration, recovery] = await Promise.all([
+          this.request('status'), this.request('configuration'), this.request('recovery')]);
+        const peers = status.state === 'offline' ? [] : (await this.request('peers')).peers;
         this.status = status; this.settings = configuration.settings; this.revision = configuration.revision;
+        this.pendingTx = recovery.pending ? recovery.transaction_id : '';
+        this.pendingMode = recovery.pending ? (recovery.mode || 'config_only') : '';
         this.tcpPorts = this.settings.mesh_tcp_ports.join(', '); this.udpPorts = this.settings.mesh_udp_ports.join(', ');
-        this.peers = status.state === 'offline' ? [] : (await this.request('peers')).peers;
-      } catch (error) { this.error = error.message; }
+        this.peers = peers;
+      } catch (error) {
+        this.status = {}; this.peers = []; this.settings = null;
+        this.revision = ''; this.stagedRevision = '';
+        this.error = error.message;
+      }
       finally { this.busy = false; }
     },
     addPeer() { this.settings.peers.push({ npub: '', transport: 'udp', address: '' }); },
@@ -86,8 +106,39 @@ export default {
       try {
         this.settings.mesh_tcp_ports = this.ports(this.tcpPorts);
         this.settings.mesh_udp_ports = this.ports(this.udpPorts);
-        await this.request('stage', { settings: this.settings, expected_revision: this.revision });
-        this.notice = 'Configuration validated and staged. Running services are unchanged.';
+        const candidate = await this.request('stage', { settings: this.settings, expected_revision: this.revision });
+        this.stagedRevision = candidate.revision;
+        this.notice = 'Configuration staged. Apply it when you are ready to check connectivity.';
+      } catch (error) { this.error = error.message; }
+      finally { this.busy = false; }
+    },
+    async activate() {
+      this.busy = true; this.error = ''; this.notice = '';
+      try {
+        const change = await this.request('activate', { expected_revision: this.stagedRevision });
+        this.pendingTx = change.transaction_id;
+        this.pendingMode = 'config_only';
+        this.notice = 'Change applied. Check network and node health, then keep it or roll back.';
+      } catch (error) { this.error = error.message; }
+      finally { this.busy = false; }
+    },
+    async confirmChange() {
+      this.busy = true; this.error = '';
+      try {
+        await this.request('confirm', { transaction_id: this.pendingTx });
+        this.pendingTx = ''; this.pendingMode = ''; this.stagedRevision = '';
+        this.notice = 'Change confirmed.';
+        await this.refresh();
+      } catch (error) { this.error = error.message; }
+      finally { this.busy = false; }
+    },
+    async rollbackChange() {
+      this.busy = true; this.error = '';
+      try {
+        await this.request('rollback', { transaction_id: this.pendingTx });
+        this.pendingTx = ''; this.pendingMode = ''; this.stagedRevision = '';
+        this.notice = 'Previous configuration restored.';
+        await this.refresh();
       } catch (error) { this.error = error.message; }
       finally { this.busy = false; }
     },
@@ -108,6 +159,7 @@ h1 { font-size: 30px; } h2 { font-size: 20px; margin-top: 0; }
 .card { background: #fff; border: 1px solid #ccd6df; border-radius: 8px; padding: 20px; margin: 16px 0; }
 dl { display: grid; grid-template-columns: 160px minmax(0, 1fr); gap: 8px; } dd { margin: 0; }
 .identity { overflow-wrap: anywhere; font-family: monospace; } .error { color: #a11422; } .hint { color: #4e6170; }
+.pending { border-color: #bf6c00; background: #fff5e4; }
 label { display: block; margin: 12px 0; } input:not([type=checkbox]), select { box-sizing: border-box; width: 100%; padding: 8px; }
 fieldset { border: 1px solid #ccd6df; margin: 12px 0; } button { padding: 9px 16px; cursor: pointer; } button:disabled { cursor: wait; opacity: .6; }
 pre { overflow: auto; } @media (max-width: 520px) { dl { grid-template-columns: 1fr; } .fips-panel { padding: 10px; } }

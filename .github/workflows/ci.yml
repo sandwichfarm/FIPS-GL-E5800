@@ -18,14 +18,18 @@ jobs:
           persist-credentials: false
       - name: Reject tracked private state and obvious secrets
         run: python3 tools/secret_scan.py
-      - name: Install Ansible for syntax checks
-        run: sudo apt-get update && sudo apt-get install -y ansible
+      - name: Install Ansible and age for recovery tests
+        run: sudo apt-get update && sudo apt-get install -y ansible age python3-pil python3-numpy
       - name: Build pinned Rust and Zig environment
         run: make dev-image
       - name: Install locked web dependencies and validate UI
-        run: make web-deps web-build web-test
+        run: make web-deps web-build web-test web-browser-test
       - name: Validate Python and Ansible logic
         run: make check
+      - name: Check Rust formatting and static analysis
+        run: make rust-check
+      - name: Test shared FIPS management backend
+        run: make rust-test
       - name: Build and test native multi-node lab
         run: make lab-build lab-up lab-test
       - name: Stop lab
@@ -37,6 +41,14 @@ jobs:
         run: make package-fips package-web package-device
       - name: Inspect package digests and metadata
         run: python3 tools/verify_artifacts.py
+      - name: Emit compatibility manifest and checksums
+        run: python3 tools/compatibility_manifest.py
+      - name: Audit locked dependency checksums and licenses
+        run: make dependency-audit
+      - name: Exercise offline recovery kit
+        run: python3 dev/lab/kit_smoke.py
+      - name: Exercise post-firmware identity recovery kit
+        run: python3 dev/lab/kit_smoke.py --restore-identity
       - name: Upload candidate artifacts and provenance
         uses: actions/upload-artifact@v4
         with:
@@ -44,5 +56,8 @@ jobs:
           path: |
             artifacts/*.ipk
             artifacts/*.ipk.json
+            artifacts/compatibility.json
+            artifacts/checksums.sha256
+            artifacts/dependencies.json
           if-no-files-found: error
           retention-days: 30

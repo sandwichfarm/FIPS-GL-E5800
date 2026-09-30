@@ -15,6 +15,8 @@
       - "{{ package_artifacts[stack_component].sha256 }}"
       - --component
       - "{{ stack_component }}"
+      - --candidate
+    chdir: "{{ playbook_dir }}/.."
   delegate_to: localhost
   check_mode: false
   changed_when: false

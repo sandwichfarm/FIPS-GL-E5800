@@ -37,7 +37,7 @@ def render(source=None):
                  '                        elif name == "monitor" and zone == "speedtest":\n                            new_view = "speedtest"',
                  '                        elif name == "monitor" and zone == "speedtest":\n                            new_view = "speedtest"\n'
                  '                        elif name == "fips" and zone == "stage_toggle":\n'
-                 '                            show_notice(fips_stage_toggle())')
+                 '                            show_notice(fips_toggle_action())')
     source = one(source,
                  '        ("games_hub", panel_games(load_game_scores())),',
                  '        ("fips", panel_fips(conn_type, cell_signal)),\n'

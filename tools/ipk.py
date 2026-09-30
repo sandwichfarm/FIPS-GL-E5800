@@ -8,9 +8,81 @@ import json
 from pathlib import Path, PurePosixPath
 import re
 import shlex
+import struct
 import tarfile
 
 NAMES = {"fips": "fips", "web_ui": "gl-sdk4-ui-fips", "device_ui": "gl-e5800-dashboard"}
+FIPS_BINARIES = {"usr/bin/fips", "usr/bin/fipsctl", "usr/bin/fips-gateway", "usr/bin/fips-router-admin"}
+FIPS_FILES = FIPS_BINARIES | {
+    "usr/bin/fipstop", "usr/bin/fips-mesh-setup", "usr/bin/fips-ap-setup",
+    "etc/init.d/fips", "etc/init.d/fips-gateway",
+    "etc/fips/fips.yaml", "etc/fips/firewall.sh",
+    "etc/sysctl.d/fips-bridge.conf", "etc/sysctl.d/fips-gateway.conf",
+    "etc/hotplug.d/net/99-fips", "etc/uci-defaults/90-fips-setup",
+    "lib/upgrade/keep.d/fips",
+}
+WEB_FILES = {
+    "usr/share/oui/menu.d/fips.json",
+    "www/cgi-bin/gl-sdk4-ui-fips",
+    "www/views/gl-sdk4-ui-fips.common.js.gz",
+}
+DEVICE_FILES = {"etc/init.d/citydash", "etc/init.d/homebutton"}
+REQUIRED_CANDIDATE_FILES = {
+    "fips": FIPS_BINARIES | {"etc/init.d/fips", "etc/init.d/fips-gateway", "lib/upgrade/keep.d/fips"},
+    "web_ui": WEB_FILES,
+    "device_ui": DEVICE_FILES | {
+        "root/dashboard/dashboard.py", "root/dashboard/button_watch.py",
+        "root/dashboard/run.sh", "root/dashboard/screen_sleep.sh",
+        "root/dashboard/toggle.sh",
+    },
+}
+REQUIRED_CANDIDATE_DEPENDENCIES = {
+    "fips": {"kmod-tun", "ip-full"},
+    "web_ui": {"fips"},
+    "device_ui": {
+        "python3", "python3-numpy", "python3-pillow", "libtiff6",
+        "zoneinfo-europe", "zoneinfo-asia", "zoneinfo-america",
+        "zoneinfo-australia-nz", "zoneinfo-pacific",
+    },
+}
+ALLOWED_FILES = {"fips": FIPS_FILES, "web_ui": WEB_FILES, "device_ui": DEVICE_FILES}
+ALLOWED_DIRS = {
+    component: {str(parent) for name in files for parent in PurePosixPath(name).parents
+                if str(parent) != "."}
+    for component, files in ALLOWED_FILES.items()
+}
+ALLOWED_DIRS["device_ui"].update({"root", "root/dashboard"})
+DEVICE_CONTROL_SCRIPTS = {
+    name: Path(__file__).resolve().parents[1] / "packaging/device-ui/control" / name
+    for name in ("postinst", "prerm")
+}
+
+
+def check_payload_path(component, name, directory):
+    if directory:
+        allowed = name == "." or name in ALLOWED_DIRS[component]
+    elif component == "device_ui" and re.fullmatch(r"root/dashboard/[A-Za-z0-9_-]+\.(?:py|sh)", name):
+        allowed = True
+    else:
+        allowed = name in ALLOWED_FILES[component]
+    if not allowed:
+        raise ValueError("Package payload outside approved component paths: " + name)
+
+
+def check_aarch64_elf(data, name):
+    if (len(data) < 64 or data[:4] != b"\x7fELF" or data[4:7] != b"\x02\x01\x01"
+            or struct.unpack_from("<H", data, 16)[0] not in (2, 3)
+            or struct.unpack_from("<H", data, 18)[0] != 183
+            or struct.unpack_from("<I", data, 20)[0] != 1
+            or struct.unpack_from("<H", data, 52)[0] != 64):
+        raise ValueError("FIPS binary is not a 64-bit little-endian AArch64 ELF: " + name)
+    program_offset = struct.unpack_from("<Q", data, 32)[0]
+    entry_size, count = struct.unpack_from("<HH", data, 54)
+    if (program_offset < 64 or entry_size != 56 or count < 1
+            or program_offset + entry_size * count > len(data)
+            or not any(struct.unpack_from("<I", data, program_offset + entry_size * index)[0] == 1
+                       for index in range(count))):
+        raise ValueError("FIPS binary has no valid loadable ELF program headers: " + name)
 
 
 def members(archive):
@@ -26,7 +98,7 @@ def members(archive):
     return result
 
 
-def inspect(path, sha256, component):
+def inspect(path, sha256, component, candidate=False):
     blob = Path(path).read_bytes()
     actual = hashlib.sha256(blob).hexdigest()
     if actual != sha256:
@@ -54,13 +126,32 @@ def inspect(path, sha256, component):
         conf = set()
         if "conffiles" in entries:
             conf = set(control.extractfile(entries["conffiles"]).read().decode().splitlines())
+        if candidate:
+            scripts = DEVICE_CONTROL_SCRIPTS if component == "device_ui" else {}
+            expected = {"control"} | set(scripts)
+            if set(entries) != expected:
+                raise ValueError("Candidate package has unexpected control scripts or files")
+            for name, source in scripts.items():
+                if source.is_symlink() or not source.is_file():
+                    raise ValueError("Reviewed candidate control script is missing: " + name)
+                entry = entries[name]
+                if not entry.isfile() or control.extractfile(entry).read() != source.read_bytes():
+                    raise ValueError("Candidate control script differs from reviewed source: " + name)
     if metadata.get("Package") != NAMES[component]:
         raise ValueError("Package name is not allowed for component " + component)
-    if metadata.get("Architecture") not in ("all", "aarch64_cortex-a53"):
+    required_arch = "aarch64_cortex-a53" if component == "fips" else "all"
+    if metadata.get("Architecture") != required_arch:
         raise ValueError("Package architecture is not supported on this router")
     if not re.fullmatch(r"[A-Za-z0-9.+:~_-]+", metadata.get("Version", "")):
         raise ValueError("Invalid package version")
+    if candidate:
+        declared = {part.strip() for part in metadata.get("Depends", "").split(",")}
+        missing = REQUIRED_CANDIDATE_DEPENDENCIES[component] - declared
+        if missing:
+            raise ValueError("Candidate package is missing dependencies: " + ", ".join(sorted(missing)))
     checks = []
+    fips_present = set()
+    payload_files = set()
     with tarfile.open(fileobj=io.BytesIO(payload_blob), mode="r:gz") as data:
         for name, entry in members(data).items():
             if not re.fullmatch(r"[A-Za-z0-9_./+@-]+", name):
@@ -70,9 +161,22 @@ def inspect(path, sha256, component):
                 raise ValueError("Recovery packages must not contain links: " + name)
             if not entry.isfile() and not entry.isdir():
                 raise ValueError("Unsupported payload entry: " + name)
-            if entry.isfile() and "/" + name not in conf and not name.startswith("etc/uci-defaults/"):
-                digest = hashlib.sha256(data.extractfile(entry).read()).hexdigest()
-                checks.append(digest + "  /" + name)
+            check_payload_path(component, name, entry.isdir())
+            if entry.isfile():
+                payload_files.add(name)
+                content = data.extractfile(entry).read()
+                if component == "fips" and name in FIPS_BINARIES:
+                    check_aarch64_elf(content, name)
+                    fips_present.add(name)
+                if "/" + name not in conf and not name.startswith("etc/uci-defaults/"):
+                    digest = hashlib.sha256(content).hexdigest()
+                    checks.append(digest + "  /" + name)
+    if component == "fips" and "usr/bin/fips" not in fips_present:
+        raise ValueError("FIPS package has no validated daemon binary")
+    if candidate:
+        missing = REQUIRED_CANDIDATE_FILES[component] - payload_files
+        if missing:
+            raise ValueError("Candidate package is missing runtime files: " + ", ".join(sorted(missing)))
     if not checks:
         raise ValueError("Package has no verifiable payload")
     return {"package": metadata["Package"], "version": metadata["Version"],
@@ -125,9 +229,10 @@ def main():
     parser.add_argument("path", type=Path)
     parser.add_argument("--sha256", required=True)
     parser.add_argument("--component", choices=NAMES, required=True)
+    parser.add_argument("--candidate", action="store_true", help="require reviewed candidate control scripts")
     parser.add_argument("--render", type=Path)
     args = parser.parse_args()
-    info, blob = inspect(args.path, args.sha256, args.component)
+    info, blob = inspect(args.path, args.sha256, args.component, candidate=args.candidate)
     if args.render:
         args.render.write_text(render(info, blob))
         args.render.chmod(0o700)

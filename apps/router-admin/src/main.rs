@@ -2,14 +2,45 @@ use fips_router_admin::{Backend, MAX_REQUEST};
 use std::io::Read;
 use std::path::PathBuf;
 
+#[cfg(target_os = "linux")]
+mod route_advertiser;
+
 fn main() {
     // Alternate paths are process arguments for local development, never API inputs.
+    let mut args = std::env::args().skip(1);
+    if args.next().as_deref() == Some("--advertise-route") {
+        #[cfg(target_os = "linux")]
+        {
+            let Some(source) = args.next().and_then(|value| value.parse().ok()) else {
+                std::process::exit(2)
+            };
+            if args.next().is_some() {
+                std::process::exit(2);
+            }
+            if let Err(error) = route_advertiser::run(source) {
+                eprintln!("FIPS route advertisement failed: {error}");
+                std::process::exit(1);
+            }
+            return;
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            eprintln!("FIPS route advertisement requires Linux");
+            std::process::exit(1);
+        }
+    }
     let mut args = std::env::args().skip(1);
     let mut backend = Backend {
         state_dir: PathBuf::from("/etc/fips/router"),
         socket_path: PathBuf::from("/run/fips/control.sock"),
+        system_root: PathBuf::from("/"),
+        package_activation_allowed: false,
     };
     while let Some(arg) = args.next() {
+        if arg == "--package-activation" {
+            backend.package_activation_allowed = true;
+            continue;
+        }
         let Some(value) = args.next() else {
             std::process::exit(2)
         };

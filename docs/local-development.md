@@ -2,24 +2,32 @@
 
 The pinned upstream source is in `components/`; integration code is in `apps/`,
 `packaging/`, and `dev/`. Run commands from the repository root. Docker Desktop,
-Python 3.9+, Make, and Ansible are needed for the documented workflows.
+Python 3.9+ with Pillow and NumPy, Make, and Ansible are needed for the
+documented workflows. Install the age CLI to run encrypted-backup tests and
+build a real offline recovery kit.
 
 ## Bootstrap and focused iteration
 
 ```sh
 make dev-image
 make web-deps
-make web-build web-test
-cargo test --locked --manifest-path apps/router-admin/Cargo.toml
-python3 -m unittest discover -s tests -v
+make web-build web-test web-browser-test
+make web-preview-serve
+make rust-check
+make rust-test
+make check
 ```
 
 `dev-image` pins the ARM64 Rust base image and Debian package snapshot. Its
 Dockerfile verifies the Zig 0.13.0 archive checksum and installs pinned
 `cargo-zigbuild` 0.19.8. `web-deps` uses the committed npm lockfile and pinned
 Node 22.16.0 image. Once dependencies exist, `make web-build` rebuilds only the
-web view. `cargo test` rebuilds only the Rust backend. Existing Ansible syntax
-checks remain in `make check`.
+web view. `make web-browser-test` runs the synthetic preview in the pinned
+Playwright container. Set `FIPS_BROWSER_SHOTS=1` when running its test script
+directly to save screenshots under `.cache/web-preview/`. `make rust-check`
+runs Rust formatting and Clippy; `make rust-test`
+rebuilds only the Rust backend. `make check` validates pinned source snapshots
+and licenses, runs Python tests, and checks Ansible syntax.
 
 ## Real local FIPS network
 
@@ -45,20 +53,40 @@ reported as local Linux evidence.
 
 ```sh
 make device-preview
+make device-preview-host
 python3 dev/device_ui_patch.py .cache/generated-device-ui/dashboard.py
 docker compose -f dev/lab/compose.yml exec -T node-a python3 /workspace/dev/lab/preview_device.py --output /tmp/fips-panel-online.png --socket /state/a/control.sock --state-dir /state/a/router
 docker cp e5800-fips-lab-node-a-1:/tmp/fips-panel-online.png .cache/fips-panel-online.png
 ```
 
-The offline preview is `.cache/fips-panel-offline.png`; the online preview uses
+The Docker offline preview is `.cache/fips-panel-offline.png`; the host command
+also works with local Pillow and NumPy installed. The online preview uses
 the live lab backend. The generated touchscreen source stays outside Git. The
 package builder applies exact hooks to the pinned upstream source and fails if
 the expected source anchors change. The stock UI is never included or replaced.
 
 The web view currently builds to `apps/web-ui/dist/`, then the package builder
-places its gzip bundle under `/www/views/`. A browser mock preview is still
-needed; a successful webpack build alone does not prove the view works inside
-GL.iNet's application.
+places its gzip bundle under `/www/views/`. A browser mock preview is
+available at `http://127.0.0.1:8787` after `make web-preview-serve`. It uses
+synthetic status and configuration data, with online, offline, and request-error
+modes; it never sends requests to the router. `make web-preview-host-serve`
+uses an already installed host npm tree for faster UI iteration. Both preview
+bundles remain under ignored `.cache/`. Playwright exercises the synthetic
+status, error, stage, confirm, and rollback flows at desktop and mobile widths.
+It does not prove that the view works inside GL.iNet's application.
+
+Configuration changes are staged, then activated under a 3-minute router-local
+guard. The web page confirms only after the daemon and persistent identity are
+healthy. Gateway mode requires a reviewed public IPv6 route and ping probe
+saved during deployment. Gateway
+activation requires an existing IPv6 default route and LAN RA service. The
+route-only advertiser responds to valid Router Solicitations, but is unverified
+with LAN clients.
+IPv4-only WAN activation remains gated until client routing and DNS behavior
+are tested; native IPv6 gateway behavior still requires hardware testing.
+The touchscreen needs a second tap to apply and the web page to confirm;
+otherwise the timer restores the prior configuration. Local tests use fake
+services and opkg. This flow is not yet validated on OpenWrt hardware.
 
 ## Candidate packages
 
@@ -67,7 +95,10 @@ make openwrt-build
 make package-fips
 make package-web
 make package-device
-python3 tools/ipk.py artifacts/gl-sdk4-ui-fips_0.1.0-1_all.ipk --sha256 DIGEST --component web_ui
+python3 tools/verify_artifacts.py
+python3 tools/compatibility_manifest.py
+python3 tools/ipk.py artifacts/gl-sdk4-ui-fips_0.1.0-1_all.ipk --sha256 DIGEST --component web_ui --candidate
+make dependency-audit
 ```
 
 The package builder writes deterministic IPKs and JSON manifests to ignored
@@ -75,18 +106,53 @@ The package builder writes deterministic IPKs and JSON manifests to ignored
 upstream revisions, toolchain, and the observed 4.10.0 target. Its compatibility
 status is `candidate_unverified`; architecture and firmware fingerprints alone
 do not prove safe installation.
+The compatibility generator requires all three candidates to pass validation,
+then writes `artifacts/compatibility.json` and `artifacts/checksums.sha256`.
+Candidate inspection also restricts owned payload paths and control scripts;
+the touchscreen scripts must match the reviewed local package sources.
+`make openwrt-build` writes a build stamp from inside the pinned Rust/Zig image.
+`make package-fips` rejects binaries changed since that build, current source
+edits missing from the stamp, or a stamp from another toolchain. A host-only
+cross-build is useful for diagnosis but cannot produce an approved FIPS IPK.
+The tracked `upstream/targets.json` pins the observed web and stock-screen
+hashes used by every package manifest. A reviewed deployment profile must
+match that exact tuple; changing firmware requires new read-only inspection
+and a rebuilt candidate set.
+The dependency audit writes `artifacts/dependencies.json` from both Cargo locks
+and the npm lock. It checks registry checksums and known license identifiers;
+the inventory is for review and does not establish legal compliance.
 
 Run `python3 tools/verify_artifacts.py` after packaging to compare all three
 candidate IPKs with their manifests. The pinned FIPS upstream revision is
 reported by `.cache/openwrt-bin/fips --version` inside the development image.
+For focused UI work, pass `--component web_ui` or `--component device_ui`.
 
 The touchscreen candidate declares `python3-pillow` as a dependency. On this
 firmware, the feed package reportedly conflicts with a file owned by
 `gl-sdk4-screen-large`. This conflict must be resolved with compatible package
-ownership before deployment. Do not bypass dependency checks.
+ownership before deployment. Do not bypass dependency checks. Run
+`make inspect-dependencies` when read-only router access is available to collect
+installed versions, the stock screen's FreeType file ownership, cached Pillow,
+`libfreetype`, and `libfreetype6` feed metadata, Python import paths, and an
+in-memory Pillow render
+probe. Feed metadata and a passing render probe do not
+prove that package payload files do not conflict; review file ownership and
+the exact feed IPK before changing the touchscreen dependency or installing it.
 
 `ansible/deploy.yml` stages known-good IPKs and arms the router-local rollback
-guardian before any package change. `ansible/restore.yml` is now check-only.
+guardian before any package change. It leaves successful installs pending until
+`ansible/confirm.yml` rechecks health after an operator verifies both interfaces.
+For a first FIPS install, reviewed `initial_fips_settings` activate inside that
+same guard; the health probe requires an enabled node with a live link.
+`ansible/restore.yml` is now check-only.
 The new deployment workflow has passed local syntax and fake-opkg fault tests,
 but has not run on the router. An explicit approved hardware pass remains
 required. The hosted CI and manual LAN-runner workflows have also not yet run.
+
+For a read-only encrypted configuration capture and offline kit, follow
+`docs/recovery.md`. Real kits require the age private identity to verify that
+the backup decrypts and contains expected files; CI exercises that round trip
+with synthetic identity and configuration data. The optional `recovery_backup`
+deployment profile restores existing FIPS identity/configuration under the
+package guard after a firmware update; a local test rehearses its generated
+router script without writing to hardware.

@@ -5,6 +5,12 @@
     command -v opkg >/dev/null
     command -v sha256sum >/dev/null
     command -v base64 >/dev/null 2>&1 || command -v openssl >/dev/null
+    command -v ln >/dev/null
+    command -v readlink >/dev/null
+    command -v chown >/dev/null
+    command -v id >/dev/null
+    command -v gzip >/dev/null
+    test -d /tmp && test -w /tmp
     ubus call system board | jsonfilter -e '@.model'
     cat /etc/glversion
     . /etc/openwrt_release

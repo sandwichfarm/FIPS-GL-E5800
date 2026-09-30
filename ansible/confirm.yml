@@ -1,0 +1,65 @@
+- name: Confirm a guarded FIPS deployment after independent interface checks
+  hosts: routers
+  gather_facts: false
+  serial: 1
+  vars_files:
+    - vars/defaults.yml
+
+  roles:
+    - preflight
+
+  tasks:
+    - name: Require explicit interface review and the exact pending transaction
+      ansible.builtin.assert:
+        that:
+          - interface_health_verified | default(false) | bool
+          - router_profile in approved_profiles
+          - recovery_transaction is defined
+          - recovery_transaction is match('^[A-Za-z0-9_-]+$')
+          - restore_components | length > 0
+          - restore_components | unique | list | length == restore_components | length
+          - restore_components | difference(['fips', 'web_ui', 'device_ui']) | length == 0
+          - recovery_probe_ip is defined
+          - recovery_probe_ip is match('^[0-9.]+$')
+          - recovery_probe_name is defined
+          - recovery_probe_name is match('^[A-Za-z0-9.-]+$')
+          - recovery_probe_ipv6 is not defined or (recovery_probe_ipv6 is match('^[0-9A-Fa-f:.]+$') and ':' in recovery_probe_ipv6)
+          - fips_required_link_count | default(1) | int >= 1
+        fail_msg: Confirm only after checking management, normal networking, FIPS, and both selected interfaces independently.
+
+    - name: Recheck pending guard, management, networking, FIPS and selected interfaces
+      ansible.builtin.raw: |
+        set -eu
+        status=$(/bin/sh /etc/fips-recovery/guard.sh status)
+        set -- $status
+        test "$1" = PENDING
+        test "$2" = {{ recovery_transaction | quote }}
+        test "$(cat /etc/fips-recovery/{{ recovery_transaction }}/backup/mode)" = packages
+        probes=/etc/fips-recovery/probes.json
+        test -s "$probes"
+        probe_ip=$(jsonfilter -i "$probes" -e '@.ip')
+        probe_name=$(jsonfilter -i "$probes" -e '@.name')
+        probe_links=$(jsonfilter -i "$probes" -e '@.minimum_links')
+        probe_components=$(jsonfilter -i "$probes" -e '@.components')
+        probe_ipv6=$(jsonfilter -i "$probes" -e '@.ipv6' 2>/dev/null || true)
+        [ "$probe_ipv6" != null ] || probe_ipv6=''
+        test "$probe_ip" = {{ recovery_probe_ip | quote }}
+        test "$probe_name" = {{ recovery_probe_name | quote }}
+        test "$probe_links" = {{ fips_required_link_count | default(1) | int }}
+        test "$probe_components" = {{ restore_components | unique | sort | join(',') | quote }}
+        test "$probe_ipv6" = {{ recovery_probe_ipv6 | default('') | quote }}
+        /bin/sh /etc/fips-recovery/health.sh \
+          "$probe_ip" "$probe_name" \
+          "$probe_components" \
+          "$probe_links" "$probe_ipv6"
+        echo FIPS_READY_TO_CONFIRM
+      register: confirmation_health
+      changed_when: false
+      failed_when: "'FIPS_READY_TO_CONFIRM' not in confirmation_health.stdout"
+
+    - name: Confirm exact pending transaction
+      ansible.builtin.raw: >-
+        /bin/sh /etc/fips-recovery/guard.sh confirm {{ recovery_transaction | quote }}
+      register: recovery_confirm
+      changed_when: "'CONFIRMED ' in recovery_confirm.stdout"
+      failed_when: "'CONFIRMED ' not in recovery_confirm.stdout"

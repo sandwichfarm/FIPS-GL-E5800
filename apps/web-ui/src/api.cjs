@@ -11,7 +11,8 @@ function sessionHeaders(browser) {
 function createApi(browser = window, transport = fetch) {
   return async function request(operation, parameters = {}) {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 7000);
+    const timer = setTimeout(() => controller.abort(),
+      operation === 'activate' || operation === 'confirm' ? 22000 : 7000);
     try {
       const response = await transport('/cgi-bin/gl-sdk4-ui-fips', {
         method: 'POST', credentials: 'same-origin', cache: 'no-store',

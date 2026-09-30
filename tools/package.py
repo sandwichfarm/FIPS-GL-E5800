@@ -52,6 +52,7 @@ def payload(component: str, binary_dir: Path | None) -> dict[str, Entry]:
         for name in ("fips", "fipsctl", "fips-gateway", "fips-router-admin"):
             add(tree, f"usr/bin/{name}", binary_dir / name, 0o755)
         add(tree, "etc/init.d/fips", ROOT / "packaging/fips/files/etc/init.d/fips", 0o755)
+        add(tree, "etc/init.d/fips-gateway", ROOT / "packaging/fips/files/etc/init.d/fips-gateway", 0o755)
         add(tree, "lib/upgrade/keep.d/fips", ROOT / "packaging/fips/files/lib/upgrade/keep.d/fips", 0o644)
     elif component == "web_ui":
         base = ROOT / "packaging/web-ui/files"
@@ -119,6 +120,10 @@ def build(component: str, binary_dir: Path | None, epoch: int) -> tuple[str, byt
     package, version, architecture = VERSIONS[component]
     entries = payload(component, binary_dir)
     files = {name: (checked_file(entry.source), entry.mode) for name, entry in entries.items()}
+    build_stamp = None
+    if component == "fips":
+        from build_provenance import verify_binary_dir
+        build_stamp = verify_binary_dir(binary_dir)
     if component == "web_ui":
         name = "www/views/gl-sdk4-ui-fips.common.js.gz"
         data, mode = files[name]
@@ -132,7 +137,7 @@ def build(component: str, binary_dir: Path | None, epoch: int) -> tuple[str, byt
     dependencies = {
         "fips": "kmod-tun, ip-full",
         "web_ui": "fips",
-        "device_ui": "python3, python3-numpy, python3-pillow, libtiff6, zoneinfo-europe, zoneinfo-asia, zoneinfo-america, zoneinfo-australia-nz",
+        "device_ui": "python3, python3-numpy, python3-pillow, libtiff6, zoneinfo-europe, zoneinfo-asia, zoneinfo-america, zoneinfo-australia-nz, zoneinfo-pacific",
     }[component]
     control = (f"Package: {package}\nVersion: {version}\nArchitecture: {architecture}\n"
                "Maintainer: GL-E5800 local integration\nSection: net\nPriority: optional\n"
@@ -153,12 +158,13 @@ def build(component: str, binary_dir: Path | None, epoch: int) -> tuple[str, byt
                 "source": next(source for source in json.loads((ROOT / "upstream/sources.json").read_text())["sources"]
                                if source["path"] == {"fips": "components/fips", "web_ui": "components/web-ui",
                                                       "device_ui": "components/device-ui"}[component]),
-                "target_device": {"model": "GL-E5800", "firmware": "4.10.0",
-                                  "architecture": "aarch64_cortex-a53", "status": "candidate_unverified"},
+                "target_device": json.loads((ROOT / "upstream/targets.json").read_text()),
                 "source_date_epoch": epoch,
                 "toolchain": {"fips": "Rust 1.94.1, Zig 0.13.0, cargo-zigbuild 0.19.8",
                               "web_ui": "Node.js 22.16.0, npm lockfile",
                               "device_ui": "Python 3.9+ deterministic tar builder"}[component]}
+    if build_stamp is not None:
+        manifest["build_provenance"] = build_stamp
     return f"{package}_{version}_{architecture}.ipk", outer, manifest
 
 
@@ -169,7 +175,10 @@ def main() -> None:
     parser.add_argument("--output", type=Path, default=ROOT / "artifacts")
     parser.add_argument("--epoch", type=int, default=1788220800, help="pinned UTC build timestamp")
     args = parser.parse_args()
-    name, blob, manifest = build(args.component, args.bin_dir, args.epoch)
+    try:
+        name, blob, manifest = build(args.component, args.bin_dir, args.epoch)
+    except (ValueError, FileNotFoundError) as error:
+        parser.exit(2, f"package: {error}\n")
     args.output.mkdir(parents=True, exist_ok=True)
     (args.output / name).write_bytes(blob)
     (args.output / f"{name}.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")

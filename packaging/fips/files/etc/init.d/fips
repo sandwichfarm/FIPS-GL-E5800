@@ -7,6 +7,9 @@ start_service() {
     [ -s /etc/fips/fips.yaml ] || return 0
     [ -s /etc/fips/router/settings.json ] || return 0
     jsonfilter -i /etc/fips/router/settings.json -e '@.enabled' | grep -qx true || return 0
+    [ -s /etc/fips/router/mesh.nft ] || return 1
+    /usr/sbin/nft delete table inet fips >/dev/null 2>&1 || true
+    /usr/sbin/nft -f /etc/fips/router/mesh.nft || return 1
     mkdir -p /run/fips
     chmod 0700 /run/fips
     procd_open_instance

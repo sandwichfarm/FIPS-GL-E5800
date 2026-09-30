@@ -19,6 +19,7 @@
       - "{{ recovery_transaction }}"
       - --render
       - "{{ prior_script.path }}"
+    chdir: "{{ playbook_dir }}/.."
   delegate_to: localhost
   changed_when: false
 

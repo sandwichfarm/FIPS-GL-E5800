@@ -14,10 +14,25 @@
     - preflight
 
   tasks:
+    - name: Refuse deployment over pending router network configuration edits
+      ansible.builtin.raw: |
+        set -eu
+        command -v uci >/dev/null
+        for name in network dhcp firewall; do
+          changes=$(uci -q changes "$name")
+          if [ -n "$changes" ]; then
+            echo "Pending UCI changes in $name; commit or revert them before deployment" >&2
+            exit 1
+          fi
+        done
+      changed_when: false
+      check_mode: false
+
     - name: Require reviewed components, firmware and a unique transaction
       ansible.builtin.assert:
         that:
           - restore_components | length > 0
+          - restore_components | unique | list | length == restore_components | length
           - restore_components | difference(['fips', 'web_ui', 'device_ui']) | length == 0
           - router_profile in approved_profiles
           - recovery_transaction is defined
@@ -28,8 +43,22 @@
           - recovery_probe_ip is match('^[0-9.]+$')
           - recovery_probe_name is defined
           - recovery_probe_name is match('^[A-Za-z0-9.-]+$')
+          - recovery_probe_ipv6 is not defined or (recovery_probe_ipv6 is match('^[0-9A-Fa-f:.]+$') and ':' in recovery_probe_ipv6)
+          - fips_required_link_count | default(1) | int >= 1
           - known_good_artifacts.keys() | list | difference(['fips', 'web_ui', 'device_ui']) | length == 0
         fail_msg: Supply reviewed firmware, selected artifacts, unique rollback transaction, and reachable network probes.
+
+    - name: Require a public IPv6 connectivity probe when supplied
+      ansible.builtin.command:
+        argv:
+          - "{{ controller_python }}"
+          - -c
+          - "import ipaddress, sys; assert ipaddress.IPv6Address(sys.argv[1]).is_global"
+          - "{{ recovery_probe_ipv6 }}"
+      delegate_to: localhost
+      check_mode: false
+      changed_when: false
+      when: recovery_probe_ipv6 is defined
 
     - name: Validate every selected candidate before router writes
       ansible.builtin.include_role:
@@ -48,10 +77,59 @@
           - "{{ item.value.sha256 }}"
           - --component
           - "{{ item.key }}"
+        chdir: "{{ playbook_dir }}/.."
       loop: "{{ known_good_artifacts | dict2items }}"
       delegate_to: localhost
       check_mode: false
       changed_when: false
+
+    - name: Require reviewed initial FIPS settings to enable the node
+      ansible.builtin.assert:
+        that:
+          - "'fips' in restore_components"
+          - initial_fips_settings is mapping
+          - initial_fips_settings.enabled | default(false) | bool
+          - initial_fips_settings.peers | default([]) | length > 0
+        fail_msg: Initial FIPS settings must be a reviewed, enabled router-node configuration.
+      when: initial_fips_settings is defined
+
+    - name: Require a reviewed recovery backup for identity restoration
+      ansible.builtin.assert:
+        that:
+          - "'fips' in restore_components"
+          - initial_fips_settings is not defined
+          - recovery_backup is mapping
+          - recovery_backup.path is defined
+          - recovery_backup.identity is defined
+        fail_msg: Restore an existing FIPS identity only with its reviewed encrypted backup and age identity.
+      when: recovery_backup is defined
+
+    - name: Require public IPv6 probe for initial LAN gateway deployment
+      ansible.builtin.assert:
+        that: recovery_probe_ipv6 is defined
+        fail_msg: Gateway mode requires a reviewed public IPv6 connectivity probe.
+      when:
+        - initial_fips_settings is defined
+        - initial_fips_settings.gateway_enabled | default(false) | bool
+
+    - name: Decrypt and validate recovery backup on the controller before router writes
+      ansible.builtin.command:
+        argv:
+          - "{{ controller_python }}"
+          - "{{ playbook_dir }}/../tools/backup_bundle.py"
+          - "{{ recovery_backup.path }}"
+          - --identity
+          - "{{ recovery_backup.identity }}"
+          - --require-fips-identity
+          - --require-enabled-fips
+          - --gateway-probe-ipv6
+          - "{{ recovery_probe_ipv6 | default('') }}"
+        chdir: "{{ playbook_dir }}/.."
+      delegate_to: localhost
+      check_mode: false
+      changed_when: false
+      no_log: true
+      when: recovery_backup is defined
 
     - name: Check package and hardware prerequisites
       ansible.builtin.include_role:
@@ -78,6 +156,21 @@
             FIPS_GUARD_PAYLOAD
             mv /etc/fips-recovery/guard.sh.tmp /etc/fips-recovery/guard.sh
             chmod 0700 /etc/fips-recovery/guard.sh
+            decode > /etc/fips-recovery/health.sh.tmp <<'FIPS_HEALTH_PAYLOAD'
+            {{ lookup('file', playbook_dir + '/../packaging/recovery/health.sh') | b64encode }}
+            FIPS_HEALTH_PAYLOAD
+            mv /etc/fips-recovery/health.sh.tmp /etc/fips-recovery/health.sh
+            chmod 0700 /etc/fips-recovery/health.sh
+            decode > /etc/fips-recovery/probes.json.tmp <<'FIPS_PROBES'
+            {{ {'ip': recovery_probe_ip, 'name': recovery_probe_name, 'minimum_links': fips_required_link_count | default(1) | int, 'ipv6': recovery_probe_ipv6 | default(none), 'components': restore_components | unique | sort | join(',')} | to_json | b64encode }}
+            FIPS_PROBES
+            mv /etc/fips-recovery/probes.json.tmp /etc/fips-recovery/probes.json
+            chmod 0600 /etc/fips-recovery/probes.json
+            decode > /etc/fips-recovery/apply-initial.sh.tmp <<'FIPS_INITIAL_SCRIPT'
+            {{ lookup('file', playbook_dir + '/../packaging/recovery/apply-initial.sh') | b64encode }}
+            FIPS_INITIAL_SCRIPT
+            mv /etc/fips-recovery/apply-initial.sh.tmp /etc/fips-recovery/apply-initial.sh
+            chmod 0700 /etc/fips-recovery/apply-initial.sh
             decode > /etc/init.d/fips-recovery.tmp <<'FIPS_INIT_PAYLOAD'
             {{ lookup('file', playbook_dir + '/../packaging/recovery/fips-recovery.init') | b64encode }}
             FIPS_INIT_PAYLOAD
@@ -108,43 +201,88 @@
           loop_control:
             loop_var: stack_component
 
-        - name: Check management, ordinary networking and package runtime
+        - name: Restore identity and configuration from the encrypted backup under the rollback guard
+          when: recovery_backup is defined
+          block:
+            - name: Allocate private controller restore staging
+              ansible.builtin.tempfile:
+                state: directory
+                prefix: e5800-restore-
+              delegate_to: localhost
+              register: identity_restore_stage
+              no_log: true
+
+            - name: Render guarded restore script on the controller
+              ansible.builtin.command:
+                argv: "{{ [controller_python, playbook_dir + '/../tools/render_backup_restore.py', recovery_backup.path, '--identity', recovery_backup.identity, '--transaction', recovery_transaction, '--output', identity_restore_stage.path + '/restore.sh'] + (['--restore-dashboard'] if 'device_ui' in restore_components else []) }}"
+                chdir: "{{ playbook_dir }}/.."
+              delegate_to: localhost
+              changed_when: false
+              no_log: true
+
+            - name: Apply backed-up FIPS files on the router
+              ansible.builtin.script:
+                cmd: "{{ identity_restore_stage.path }}/restore.sh"
+                executable: /bin/sh
+              register: identity_restore_result
+              changed_when: "'FIPS_BACKUP_CHANGED' in identity_restore_result.stdout"
+              failed_when: "'FIPS_BACKUP_RESTORED' not in identity_restore_result.stdout"
+              no_log: true
+          always:
+            - name: Delete private controller restore staging
+              ansible.builtin.file:
+                path: "{{ identity_restore_stage.path }}"
+                state: absent
+              delegate_to: localhost
+              when: identity_restore_stage is defined and identity_restore_stage.path is defined
+              no_log: true
+
+        - name: Apply reviewed initial FIPS settings inside the package rollback window
           ansible.builtin.raw: |
             set -eu
-            ubus call system board >/dev/null
-            ip -4 route get {{ recovery_probe_ip | quote }} >/dev/null
-            ping -c 1 -W 3 {{ recovery_probe_ip | quote }} >/dev/null
-            nslookup {{ recovery_probe_name | quote }} >/dev/null
-            {% if 'fips' in restore_components %}
-            test -x /usr/bin/fips
-            test -x /usr/bin/fips-router-admin
-            test -x /etc/init.d/fips
-            if [ -f /etc/fips/router/settings.json ] &&
-               [ "$(jsonfilter -i /etc/fips/router/settings.json -e '@.enabled')" = true ]; then
-                /etc/init.d/fips status >/dev/null
-                test -S /run/fips/control.sock
-                printf '{"operation":"diagnostics"}\n' | /usr/bin/fips-router-admin | jsonfilter -e '@.data.daemon_reachable' | grep -qx true
-                printf '{"operation":"status"}\n' | /usr/bin/fips-router-admin | jsonfilter -e '@.data.persistent' | grep -qx true
-            fi
-            {% endif %}
-            {% if 'web_ui' in restore_components %}
-            test -s /www/views/gl-sdk4-ui-fips.common.js.gz
-            test -x /www/cgi-bin/gl-sdk4-ui-fips
-            {% endif %}
-            {% if 'device_ui' in restore_components %}
-            python3 -c 'import PIL.Image, numpy'
-            test -s /root/dashboard/dashboard.py
-            {% endif %}
-            echo FIPS_HEALTHY
+            decode() { if command -v base64 >/dev/null 2>&1; then base64 -d; else openssl base64 -d; fi; }
+            decode <<'FIPS_INITIAL_SETTINGS' | /bin/sh /etc/fips-recovery/apply-initial.sh {{ recovery_transaction | quote }}
+            {{ initial_fips_settings | to_json | b64encode }}
+            FIPS_INITIAL_SETTINGS
+          register: initial_fips_apply
+          changed_when: "'FIPS_CONFIG_APPLIED' in initial_fips_apply.stdout"
+          no_log: true
+          when: initial_fips_settings is defined
+
+        - name: Start the selected touchscreen dashboard inside the rollback window
+          ansible.builtin.raw: |
+            set -eu
+            test -x /root/dashboard/toggle.sh
+            /etc/init.d/homebutton enable
+            /etc/init.d/homebutton start
+            /root/dashboard/toggle.sh on
+            /etc/init.d/citydash status >/dev/null
+            echo DEVICE_UI_ACTIVE
+          register: device_ui_activation
+          changed_when: "'DEVICE_UI_ACTIVE' in device_ui_activation.stdout"
+          when: "'device_ui' in restore_components"
+
+        - name: Check management, ordinary networking and package runtime
+          ansible.builtin.raw: >-
+            /bin/sh /etc/fips-recovery/health.sh
+            {{ recovery_probe_ip | quote }} {{ recovery_probe_name | quote }}
+            {{ restore_components | join(',') | quote }}
+            {{ fips_required_link_count | default(1) | int }}
+            {{ recovery_probe_ipv6 | default('') | quote }}
           register: deployment_health
           changed_when: false
-          failed_when: "'FIPS_HEALTHY' not in deployment_health.stdout"
+          until: "'FIPS_HEALTHY' in deployment_health.stdout"
+          retries: 6
+          delay: 5
 
-        - name: Confirm transaction only after health checks succeed
-          ansible.builtin.raw: >-
-            /bin/sh /etc/fips-recovery/guard.sh confirm {{ recovery_transaction | quote }}
-          register: recovery_confirm
-          changed_when: "'CONFIRMED ' in recovery_confirm.stdout"
+        - name: Leave transaction pending for independent interface checks
+          ansible.builtin.debug:
+            msg: >-
+              Packages passed automated checks but remain under the router-local
+              rollback deadline. Verify the web and touchscreen interfaces,
+              then run ansible/confirm.yml with interface_health_verified=true
+              before the {{ recovery_seconds }}-second deadline. Otherwise the
+              router rolls back automatically.
 
       rescue:
         - name: Roll back immediately after a failed local deployment step

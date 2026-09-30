@@ -23,8 +23,10 @@
           - "{{ package_artifacts[stack_component].sha256 }}"
           - --component
           - "{{ stack_component }}"
+          - --candidate
           - --render
           - "{{ package_stage.path }}/install.sh"
+        chdir: "{{ playbook_dir }}/.."
       delegate_to: localhost
       changed_when: false
 

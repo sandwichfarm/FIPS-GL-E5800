@@ -1,5 +1,7 @@
 import hashlib
+import json
 from pathlib import Path
+import struct
 import sys
 import tempfile
 import unittest
@@ -7,24 +9,52 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import ipk
 import package
+import build_provenance
+
+
+def elf_fixture(name):
+    data = bytearray(120)
+    data[:7] = b"\x7fELF\x02\x01\x01"
+    struct.pack_into("<HHI", data, 16, 2, 183, 1)
+    struct.pack_into("<Q", data, 32, 64)
+    struct.pack_into("<HHH", data, 52, 64, 56, 1)
+    struct.pack_into("<I", data, 64, 1)
+    return bytes(data) + name.encode()
 
 
 class DeterministicPackageTests(unittest.TestCase):
+    def test_touchscreen_package_declares_all_runtime_dependencies(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            name, blob, manifest = package.build("device_ui", None, 1788220800)
+            artifact = root / name
+            artifact.write_bytes(blob)
+            inspected, _ = ipk.inspect(artifact, manifest["sha256"], "device_ui", candidate=True)
+            declared = set(inspected["depends"].split(", "))
+            self.assertEqual(declared, {
+                "python3", "python3-numpy", "python3-pillow", "libtiff6",
+                "zoneinfo-europe", "zoneinfo-asia", "zoneinfo-america",
+                "zoneinfo-australia-nz", "zoneinfo-pacific",
+            })
+
     def test_fips_package_repeats_and_preserves_payload(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             for binary in ("fips", "fipsctl", "fips-gateway", "fips-router-admin"):
-                (root / binary).write_bytes((binary + "-fixture").encode())
+                (root / binary).write_bytes(elf_fixture(binary))
+            (root / "build.json").write_text(json.dumps(build_provenance.record_for_bins(root)))
             name, first, manifest = package.build("fips", root, 1788220800)
             self.assertEqual(first, package.build("fips", root, 1788220800)[1])
             self.assertEqual(manifest["sha256"], hashlib.sha256(first).hexdigest())
             artifact = root / name
             artifact.write_bytes(first)
-            inspected, _ = ipk.inspect(artifact, manifest["sha256"], "fips")
+            inspected, _ = ipk.inspect(artifact, manifest["sha256"], "fips", candidate=True)
             self.assertEqual(inspected["architecture"], "aarch64_cortex-a53")
             self.assertTrue(any(line.endswith("/usr/bin/fips-router-admin") for line in inspected["checks"]))
-            (root / "fips").write_bytes(b"changed")
-            self.assertNotEqual(first, package.build("fips", root, 1788220800)[1])
+            self.assertIn("etc/init.d/fips-gateway", manifest["payload"])
+            (root / "fips").write_bytes(elf_fixture("changed"))
+            with self.assertRaisesRegex(ValueError, "changed after cross-build"):
+                package.build("fips", root, 1788220800)
 
     def test_linked_binary_is_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -34,6 +64,17 @@ class DeterministicPackageTests(unittest.TestCase):
             (root / "fips").unlink()
             (root / "fips").symlink_to(root / "fipsctl")
             with self.assertRaisesRegex(ValueError, "linked"):
+                package.build("fips", root, 1788220800)
+
+    def test_stale_source_stamp_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for binary in ("fips", "fipsctl", "fips-gateway", "fips-router-admin"):
+                (root / binary).write_bytes(elf_fixture(binary))
+            stamp = build_provenance.record_for_bins(root)
+            stamp["admin_tree_sha256"] = "0" * 64
+            (root / "build.json").write_text(json.dumps(stamp))
+            with self.assertRaisesRegex(ValueError, "stale: admin_tree_sha256"):
                 package.build("fips", root, 1788220800)
 
 

@@ -30,11 +30,15 @@ jobs:
         run: python3 tools/secret_scan.py
       - name: Build and test candidate stack on the controller
         run: |
-          make dev-image web-deps web-build web-test check
+          make dev-image web-deps web-build web-test web-browser-test check rust-check rust-test
           make lab-build lab-up lab-test
           make lab-down
           make openwrt-build package-fips package-web package-device
           python3 tools/verify_artifacts.py
+          python3 tools/compatibility_manifest.py
+          make dependency-audit
+          python3 dev/lab/kit_smoke.py
+          python3 dev/lab/kit_smoke.py --restore-identity
       - name: Stop lab after a failed test
         if: failure()
         run: make lab-down
@@ -46,3 +50,7 @@ jobs:
         run: |
           case "$RECOVERY_TX" in ''|*[!A-Za-z0-9_-]*) echo 'Invalid transaction ID' >&2; exit 2;; esac
           ansible-playbook ansible/deploy.yml -e @/etc/gl-e5800/deploy.yml -e "recovery_transaction=$RECOVERY_TX"
+      - name: Show manual confirmation step
+        run: |
+          echo 'Deployment remains pending under the router rollback deadline.'
+          echo 'Verify the web and touchscreen interfaces, then run ansible/confirm.yml from the local controller with interface_health_verified=true.'

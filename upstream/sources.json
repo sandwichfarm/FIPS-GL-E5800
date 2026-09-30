@@ -1,7 +1,7 @@
 {
   "sources": [
-    {"path": "components/fips", "url": "https://github.com/jmcorgan/fips.git", "ref": "v0.5.2", "commit": "53a3ec4b2fbaceb7009dd4fbe6974b011e452ae5", "license": "MIT"},
-    {"path": "components/web-ui", "url": "https://github.com/go-wombat/gl-sdk4-plugin-kit.git", "ref": "main", "commit": "570ac6596c12a507b41969002acf455e2206c271", "license": "MIT"},
-    {"path": "components/device-ui", "url": "https://github.com/robavionix/gl-e5800-dashboard.git", "ref": "main", "commit": "e01ee320eb42db46b75468fc854a21a740bac75e", "license": "MIT"}
+    {"path": "components/fips", "url": "https://github.com/jmcorgan/fips.git", "ref": "v0.5.2", "commit": "53a3ec4b2fbaceb7009dd4fbe6974b011e452ae5", "license": "MIT", "tree_sha256": "c8f8406c28e74e3fcd73e3b56c3677fd7fff735c656d7120b3c41c261395c901"},
+    {"path": "components/web-ui", "url": "https://github.com/go-wombat/gl-sdk4-plugin-kit.git", "ref": "main", "commit": "570ac6596c12a507b41969002acf455e2206c271", "license": "MIT", "tree_sha256": "e230f56561c293c2c9cddee647206f840f667a642cb2493275866d16f92f609d"},
+    {"path": "components/device-ui", "url": "https://github.com/robavionix/gl-e5800-dashboard.git", "ref": "main", "commit": "e01ee320eb42db46b75468fc854a21a740bac75e", "license": "MIT", "tree_sha256": "bf45b17c31ecabb41595c84e6a8f5da25840106337d81997f91757df5a8228dd"}
   ]
 }

@@ -18,7 +18,7 @@ GL.iNet 4.8.3 to 4.10.0 (OpenWrt 23.05.4, aarch64_cortex-a53).
 | `ansible/` | Read-only inspection and guarded deployment roles |
 | `tools/capture.py` | SSH capture of stock UI assets from `/rom` |
 | `tools/ipk.py` | Pinned IPK validation and Python-free remote installer generation |
-| `upstream/sources.json` | Source URLs, exact imported commits and licenses |
+| `upstream/sources.json` | Source URLs, exact imported commits, licenses, and snapshot digests |
 | `private/device/` | Local-only stock firmware captures, extracted assets, readable JS, checksums |
 | `artifacts/` | Local-only downloaded/built packages |
 
@@ -40,17 +40,20 @@ decompressed JavaScript is still compiled code, not recovered original source.
 ## Status
 
 - Source imports and pre/post-upgrade firmware captures are complete.
-- The management backend validates and stages configuration. It reads a live FIPS
+- The management backend validates, stages, and activates configuration. It reads a live FIPS
   control socket and excludes private identity data from responses.
 - The web view and touchscreen FIPS panel build locally. The touchscreen package
   still needs a compatible Pillow dependency package before device installation.
 - Two real Linux FIPS nodes connected in containers; IPv6 mesh ping and identity
   preservation after an abrupt process crash passed locally.
-- All ARM64 binaries and three deterministic candidate packages build locally.
+- ARM64 binaries and three deterministic candidate packages built locally before
+  the latest backend edits. Current ARM64 binaries also cross-build with the host
+  toolchain, but the FIPS candidate requires a fresh pinned CI-toolchain build.
   Router-local rollback passes fake-opkg fault tests. CI/CD and guarded Ansible
   deployment are authored, with hosted and hardware verification still pending.
-- Configuration activation, isolated gateway/firewall behavior, touchscreen
-  Pillow packaging, and a complete offline recovery kit remain in progress.
+- Configuration activation and rollback pass local fake-service tests. Isolated
+  gateway behavior, touchscreen Pillow packaging, a real encrypted backup and
+  on-device verification remain in progress.
 - No package or configuration has been installed on the router by this project.
 - 4.10.0 has been observed; neither community UI nor FIPS has been runtime-tested
   on the GL-E5800. No recovery profile is approved for installation by default.

@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GL-E5800 FIPS web preview</title>
+  <style>
+    body { margin: 0; background: #eef3f7; }
+    .preview-bar { padding: 12px 20px; background: #193348; color: white; font: 14px system-ui, sans-serif; }
+    .preview-bar button { margin-left: 8px; padding: 5px 10px; }
+  </style>
+</head>
+<body>
+  <div class="preview-bar">
+    Synthetic local preview. No router requests are sent. Mode: <strong id="preview-mode">online</strong>
+    <button onclick="previewMode('online')">Online</button>
+    <button onclick="previewMode('offline')">Offline</button>
+    <button onclick="previewMode('error')">Request error</button>
+  </div>
+  <div id="app"></div>
+  <script src="preview.js"></script>
+</body>
+</html>
