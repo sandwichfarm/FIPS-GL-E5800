@@ -267,3 +267,16 @@ new runtime packages after controller loss. The relocated offline kit verifies
 all runtime IPKs and renders a syntactically valid installer without feed
 access. The complete Python suite now passes 101 tests; actual opkg installation
 and rollback of these feed IPKs remain hardware gates.
+
+An isolated export of commit `7e3f724` fetched the 34 pinned IPKs, installed
+the locked web dependencies, rebuilt the development image, cross-built the
+ARM64 FIPS binaries, and packaged all three components. The resulting SHA-256
+digests matched the reviewed candidates exactly: FIPS
+`a546192757f8f5d6985a9fa028e7c27ddf8c988f812ffcd897b5fa5e1f67c0b0`,
+web `c6dfa3e704773897d168168d987b55cf111cb496931226e9d6f88adff22ee72b`,
+and touchscreen
+`d2ba1d04d3c5cdc2f1421a40722aeaafa63bbff1c0b7d5819dd236a7adfd35e3`.
+The export needed a Git index for `check_sources.py` provenance checks;
+a normal checkout supplies it. Web unit and browser preview tests passed in
+the export, as did artifact verification, compatibility emission, dependency
+audit, and a relocated recovery kit with encrypted identity restore.
