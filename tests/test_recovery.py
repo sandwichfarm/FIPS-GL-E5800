@@ -118,6 +118,32 @@ esac
         self.assertEqual(process.returncode, expected, process.stdout + process.stderr)
         return process.stdout
 
+    def display_service(self, name: str, *, enabled: bool, running: bool) -> None:
+        state = self.root / "display-state"
+        state.mkdir(exist_ok=True)
+        for suffix, present in (("enabled", enabled), ("running", running)):
+            marker = state / f"{name}.{suffix}"
+            if present:
+                marker.touch()
+            else:
+                marker.unlink(missing_ok=True)
+        script = self.etc / "init.d" / name
+        script.write_text(
+            '#!/bin/sh\n'
+            f'marker="$FIPS_TEST_FS_ROOT/display-state/{name}"\n'
+            'case "$1" in\n'
+            '  enabled) test -e "$marker.enabled";;\n'
+            '  status) test -e "$marker.running";;\n'
+            '  enable) touch "$marker.enabled";;\n'
+            '  disable) rm -f "$marker.enabled";;\n'
+            f'  start) [ "${{FIPS_TEST_DISPLAY_START_FAIL:-}}" != "{name}" ] || exit 1; '
+            'touch "$marker.running";;\n'
+            '  stop) rm -f "$marker.running";;\n'
+            '  *) exit 2;;\n'
+            'esac\n'
+        )
+        script.chmod(0o755)
+
     def test_deadline_restores_identity_config_and_prior_package(self) -> None:
         self.run_guard("arm", "tx1", "60")
         (self.etc / "fips/identity.key").write_text("bad deployment")
@@ -340,8 +366,54 @@ esac
         toggle.chmod(0o755)
         self.env["FIPS_TEST_TOGGLE_LOG"] = str(self.root / "toggle.log")
         self.run_guard("arm", "tx1", "60")
+        (dashboard / "config.json").write_text('{"temporary":true}\n')
         self.run_guard("rollback")
-        self.assertEqual((self.root / "toggle.log").read_text().splitlines(), ["off", "off"])
+        self.assertEqual((self.root / "toggle.log").read_text().splitlines(), ["off"])
+        self.assertFalse((dashboard / "config.json").exists())
+
+    def test_upgrade_rollback_restores_prior_dashboard_and_button_watcher(self) -> None:
+        self.state.write_text("fips\ngl-e5800-dashboard\n")
+        previous = self.etc / "fips-recovery/tx1/previous"
+        archive = previous / "gl-e5800-dashboard.ipk"
+        archive.write_bytes(b"known-good dashboard")
+        (previous / "gl-e5800-dashboard.sha256").write_text(
+            hashlib.sha256(archive.read_bytes()).hexdigest()
+        )
+        (previous / "gl-e5800-dashboard.version").write_text("1\n")
+        self.display_service("gl_screen", enabled=False, running=False)
+        self.display_service("citydash", enabled=True, running=True)
+        self.display_service("homebutton", enabled=True, running=True)
+        dashboard = self.root / "root/dashboard"
+        dashboard.mkdir(parents=True)
+        config = dashboard / "config.json"
+        config.write_text('{"city":"before"}\n')
+        config.chmod(0o640)
+        network = self.etc / "config/network"
+        network.chmod(0o606)
+        self.run_guard("arm", "tx1", "60")
+
+        # Model an interrupted upgrade whose package scripts reverted to stock.
+        self.display_service("gl_screen", enabled=True, running=True)
+        self.display_service("citydash", enabled=False, running=False)
+        self.display_service("homebutton", enabled=False, running=False)
+        config.write_text('{"city":"after"}\n')
+        config.chmod(0o600)
+        network.write_text("changed network")
+        network.chmod(0o600)
+        self.run_guard("rollback")
+        state = self.root / "display-state"
+        for name, enabled, running in (
+            ("gl_screen", False, False),
+            ("citydash", True, True),
+            ("homebutton", True, True),
+        ):
+            self.assertEqual((state / f"{name}.enabled").exists(), enabled)
+            self.assertEqual((state / f"{name}.running").exists(), running)
+        self.assertEqual(self.state.read_text(), "fips\ngl-e5800-dashboard\n")
+        self.assertEqual(config.read_text(), '{"city":"before"}\n')
+        self.assertEqual(config.stat().st_mode & 0o777, 0o640)
+        self.assertEqual(network.read_text(), "original network")
+        self.assertEqual(network.stat().st_mode & 0o777, 0o606)
 
     def test_stock_screen_start_failure_keeps_rollback_pending_for_retry(self) -> None:
         self.run_guard("arm", "tx1", "60")
@@ -350,6 +422,27 @@ esac
         self.assertTrue((self.etc / "fips-recovery/pending").exists())
         self.assertFalse((self.etc / "fips-recovery/tx1/result").exists())
         self.assertIn("ROLLED_BACK tx1", self.run_guard("check", env=expired))
+        self.assertFalse((self.etc / "fips-recovery/pending").exists())
+
+    def test_dashboard_restart_failure_keeps_rollback_pending_for_retry(self) -> None:
+        self.state.write_text("fips\ngl-e5800-dashboard\n")
+        previous = self.etc / "fips-recovery/tx1/previous"
+        archive = previous / "gl-e5800-dashboard.ipk"
+        archive.write_bytes(b"known-good dashboard")
+        (previous / "gl-e5800-dashboard.sha256").write_text(
+            hashlib.sha256(archive.read_bytes()).hexdigest()
+        )
+        (previous / "gl-e5800-dashboard.version").write_text("1\n")
+        self.display_service("gl_screen", enabled=False, running=False)
+        self.display_service("citydash", enabled=True, running=True)
+        self.run_guard("arm", "tx1", "60")
+        self.display_service("gl_screen", enabled=True, running=True)
+        self.display_service("citydash", enabled=False, running=False)
+        self.run_guard("rollback", expected=1,
+                       env=self.env | {"FIPS_TEST_DISPLAY_START_FAIL": "citydash"})
+        self.assertTrue((self.etc / "fips-recovery/pending").exists())
+        self.assertFalse((self.etc / "fips-recovery/tx1/result").exists())
+        self.assertIn("ROLLED_BACK tx1", self.run_guard("rollback"))
         self.assertFalse((self.etc / "fips-recovery/pending").exists())
 
     def test_config_rollback_reloads_previous_firewall_and_service(self) -> None:

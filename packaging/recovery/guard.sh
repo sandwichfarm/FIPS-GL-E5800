@@ -27,6 +27,61 @@ installed() {
 present() { opkg status "$1" 2>/dev/null | awk -v name="$1" '/^Package:/ && $2 == name { found=1 } END { exit !found }'; }
 service() { [ -x "$DEVICE_ETC/init.d/$1" ] && "$DEVICE_ETC/init.d/$1" "$2"; }
 
+record_display_service() {
+    display_name=$1
+    display_state="$ROOT/$txn/backup/$display_name-service"
+    if [ ! -x "$DEVICE_ETC/init.d/$display_name" ]; then
+        printf 'absent absent\n' > "$display_state" || return 1
+    else
+        if service "$display_name" enabled >/dev/null 2>&1; then
+            display_enabled=enabled
+        else
+            display_enabled=disabled
+        fi
+        if service "$display_name" status >/dev/null 2>&1; then
+            display_running=running
+        else
+            display_running=stopped
+        fi
+        printf '%s %s\n' "$display_enabled" "$display_running" > "$display_state" || return 1
+    fi
+    chmod 0600 "$display_state" || return 1
+}
+
+restore_display_service() {
+    display_name=$1
+    display_state="$ROOT/$txn/backup/$display_name-service"
+    [ -f "$display_state" ] || return 1
+    IFS=' ' read -r display_enabled display_running < "$display_state" || return 1
+    case "$display_enabled $display_running" in
+        'absent absent') [ ! -x "$DEVICE_ETC/init.d/$display_name" ]; return $? ;;
+        'enabled running'|'enabled stopped'|'disabled running'|'disabled stopped') ;;
+        *) return 1 ;;
+    esac
+    [ -x "$DEVICE_ETC/init.d/$display_name" ] || return 1
+    if [ "$display_enabled" = enabled ]; then
+        service "$display_name" enable >/dev/null 2>&1 || return 1
+    else
+        service "$display_name" disable >/dev/null 2>&1 || return 1
+    fi
+    if [ "$display_running" = running ]; then
+        service "$display_name" start >/dev/null 2>&1 || return 1
+    else
+        service "$display_name" stop >/dev/null 2>&1 || return 1
+    fi
+    if service "$display_name" enabled >/dev/null 2>&1; then
+        display_actual_enabled=enabled
+    else
+        display_actual_enabled=disabled
+    fi
+    if service "$display_name" status >/dev/null 2>&1; then
+        display_actual_running=running
+    else
+        display_actual_running=stopped
+    fi
+    [ "$display_actual_enabled $display_actual_running" = "$display_enabled $display_running" ] || return 1
+}
+
 release_lock() {
     [ "$(readlink "$LOCK" 2>/dev/null)" = "$$" ] && rm -f "$LOCK"
     return 0
@@ -132,6 +187,19 @@ arm() {
         echo absent > "$ROOT/$txn/backup/fips-service"
     fi
     chmod 0600 "$ROOT/$txn/backup/fips-service"
+    if [ "$mode" = packages ]; then
+        for display_name in gl_screen citydash homebutton; do
+            record_display_service "$display_name" || fail "cannot snapshot $display_name state"
+        done
+        dashboard_config="$TEST_ROOT/root/dashboard/config.json"
+        [ ! -L "$TEST_ROOT/root/dashboard" ] && [ ! -L "$dashboard_config" ] ||
+            fail 'dashboard configuration cannot be linked'
+        if [ -e "$dashboard_config" ]; then
+            [ -f "$dashboard_config" ] || fail 'dashboard configuration must be a file'
+            cp -p "$dashboard_config" "$ROOT/$txn/backup/dashboard-config.json" ||
+                fail 'dashboard configuration backup failed'
+        fi
+    fi
     if [ -x "$DEVICE_ETC/init.d/fips-gateway" ]; then
         if "$DEVICE_ETC/init.d/fips-gateway" enabled >/dev/null 2>&1; then
             echo enabled > "$ROOT/$txn/backup/gateway-service"
@@ -143,9 +211,9 @@ arm() {
     fi
     chmod 0600 "$ROOT/$txn/backup/gateway-service"
     for name in firewall network dhcp; do
+        [ ! -L "$DEVICE_ETC/config/$name" ] || fail "linked configuration: $name"
         if [ -f "$DEVICE_ETC/config/$name" ]; then
-            cp "$DEVICE_ETC/config/$name" "$ROOT/$txn/backup/$name" || fail "backup failed: $name"
-            chmod 0600 "$ROOT/$txn/backup/$name"
+            cp -p "$DEVICE_ETC/config/$name" "$ROOT/$txn/backup/$name" || fail "backup failed: $name"
         fi
     done
     echo "$(now) $(uptime) $(boot_id)" > "$ROOT/$txn/backup/armed-at"
@@ -172,11 +240,12 @@ restore_config() {
         return 0
     fi
     [ ! -L "$target" ] || return 1
-    if [ -f "$backup" ] && { [ ! -f "$target" ] || ! cmp -s "$backup" "$target"; }; then
+    if [ -f "$backup" ]; then
+        changed=0
+        if [ ! -f "$target" ] || ! cmp -s "$backup" "$target"; then changed=2; fi
         mkdir -p "$DEVICE_ETC/config" || return 1
-        cp "$backup" "$target" || return 1
-        chmod 0600 "$target" || return 1
-        return 2
+        cp -p "$backup" "$target" || return 1
+        return "$changed"
     fi
     return 0
 }
@@ -249,6 +318,16 @@ rollback() {
     else
         rm -rf "$DEVICE_ETC/fips" || return 1
     fi
+    if [ "$mode" = packages ]; then
+        dashboard_config="$TEST_ROOT/root/dashboard/config.json"
+        [ ! -L "$TEST_ROOT/root/dashboard" ] && [ ! -L "$dashboard_config" ] || return 1
+        if [ -f "$ROOT/$txn/backup/dashboard-config.json" ]; then
+            mkdir -p "$TEST_ROOT/root/dashboard" || return 1
+            cp -p "$ROOT/$txn/backup/dashboard-config.json" "$dashboard_config" || return 1
+        else
+            rm -f "$dashboard_config" || return 1
+        fi
+    fi
     if command -v nft >/dev/null 2>&1; then
         nft delete table inet fips >/dev/null 2>&1 || true
         if [ -s "$DEVICE_ETC/fips/router/mesh.nft" ] &&
@@ -282,16 +361,11 @@ rollback() {
         *) return 1 ;;
     esac
     if [ "$mode" = packages ]; then
-        # A dashboard postinst can start its watcher; leave stock active.
-        if [ -x "$TEST_ROOT/root/dashboard/toggle.sh" ]; then
-            "$TEST_ROOT/root/dashboard/toggle.sh" off >/dev/null 2>&1 || true
-        fi
-        service citydash stop >/dev/null 2>&1 || true
-        # Do not report rollback complete while the physical screen is dark.
-        # Keep the pending marker so the watchdog can retry after a failure.
-        service gl_screen enable >/dev/null 2>&1 || return 1
-        service gl_screen start >/dev/null 2>&1 || return 1
-        service gl_screen status >/dev/null 2>&1 || return 1
+        # Maintainer scripts may switch to the stock display while packages are
+        # replaced. Restore the owner and button watcher observed before arm.
+        restore_display_service gl_screen || return 1
+        restore_display_service citydash || return 1
+        restore_display_service homebutton || return 1
     fi
     printf '%s\n' "ROLLED_BACK $txn" > "$ROOT/$txn/result"
     chmod 0600 "$ROOT/$txn/result"

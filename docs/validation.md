@@ -308,3 +308,13 @@ verified off-router backup, not a tested restore. The guarded deployment must
 still capture a fresh backup before its first persistent write. Hardware
 rollback, stock/FIPS switching, and normal internet access remain deployment
 gates requiring explicit approval before the trial.
+
+A further read-only check found that the stock router's network, firewall, and
+DHCP files use modes `606`, `646`, and `606`. The prior rollback forced changed
+files to `600`, so it could not restore that predeployment state exactly. The
+router-local guard now preserves file metadata, dashboard settings, and the
+enabled/running state of the stock screen, community dashboard, and button
+watcher. A local upgrade test restores an active dashboard; a failed dashboard
+restart leaves rollback pending for retry. `make check` passes 106 Python tests,
+shell syntax, and Ansible syntax. These remain local tests; the actual router
+has not had a FIPS package installed or rolled back.

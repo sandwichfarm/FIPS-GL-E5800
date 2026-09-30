@@ -7,6 +7,13 @@ packages. Do not replay their files across firmware versions. The rollback,
 encrypted backup, and offline-kit paths have local tests; hardware deployment
 remains unapproved and unverified.
 
+Before requesting a hardware trial, review the rollback against the exact
+predeployment package, configuration, service, and display state. The owner
+also requires a practical FIPS/stock switch and proof that ordinary internet,
+DNS, VPN, and router administration still work in both modes. A guarded trial
+still needs explicit approval while this router is in use; local tests and a
+matching firmware fingerprint are not approval or hardware verification.
+
 ## Before any deployment
 
 1. Back up the router's `/etc/fips/` identity/configuration, dashboard settings,
@@ -249,9 +256,14 @@ The local interrupted-install test includes an opkg `unpacked` state. If
 removing that partial package fails, the guard keeps the transaction pending
 and retries on its next watchdog check; an operator must inspect the recorded
 result and package state if the retry cannot complete.
-The guard also keeps the marker if the stock `gl_screen` service cannot be
-enabled, started, and observed running after package restoration. This path has
-an isolated failure/retry test, but still needs an on-device display check.
+The guard records whether `gl_screen`, `citydash`, and `homebutton` were enabled
+and running before arming. After package restoration it restores those states,
+the dashboard settings file, and the original ownership/mode of the network,
+DHCP, and firewall files. A first-install rollback returns to the stock screen;
+an upgrade rollback returns to the previously active dashboard. If either
+screen cannot be restarted and observed in its prior state, the guard keeps
+the pending marker for retry. These paths have isolated failure/retry tests,
+but still need an on-device display check.
 The dashboard's removal script also stops its button watcher and dashboard,
 then starts the stock screen directly. It does not require `toggle.sh` to be
 present after an interrupted install.
@@ -264,8 +276,8 @@ profile before confirmation. If FIPS is being disabled, network probes still
 must pass. The touchscreen stages on the first tap and applies on the second;
 use the web page to confirm. Its button can roll back a pending change. A lost
 browser or failed daemon lets the local timer restore the prior FIPS config
-without changing the touchscreen owner. Package rollback returns to the stock
-display. These flows have local fake-service tests, but no on-device acceptance
+without changing the touchscreen owner. Package rollback restores the prior
+display owner. These flows have local fake-service tests, but no on-device acceptance
 yet. The optional LAN gateway is not approved for hardware use until routing,
 firewall and client behavior are tested on this model.
 
@@ -285,7 +297,7 @@ not yet observed running on GitHub.
 | --- | --- |
 | Router-local deadline, reboot and interrupted-install rollback | Passed isolated fake-opkg/filesystem tests; not run on the GL-E5800. |
 | Post-firmware identity restore followed by controller loss | Passed isolated filesystem test; not run on OpenWrt hardware. |
-| Offline kit integrity and tamper detection | Passed synthetic two-UI kit smoke and local age encrypt/decrypt tests; real router backup remains untested. |
+| Offline kit integrity and tamper detection | Passed synthetic two-UI kit smoke and local age encrypt/decrypt tests; a real stock-router backup was decrypted and validated, but not restored. |
 | Four-second soft reset and ten-second factory reset | Vendor documentation only; neither reset was performed. |
 | No-SSH debrick/support procedure | Vendor documentation only; no debrick action was performed. |
 
@@ -294,7 +306,8 @@ not yet observed running on GitHub.
   `/bin/sh /etc/fips-recovery/guard.sh status`. For a pending transaction, use
   `/bin/sh /etc/fips-recovery/guard.sh rollback`; confirm only after independent
   network, daemon, web and screen checks. The guard restores prior IPKs and the
-  saved identity/config, then returns to the stock screen for a package rollback.
+  saved identity/config and predeployment screen state. For a first installation,
+  this is the stock screen.
 - If SSH is lost, wait for the guard's deadline and reconnect. A reboot also
   makes a pending transaction roll back on boot. Do not overwrite the stock
   `/www` tree or `gl_screen` binary with an old capture.
