@@ -71,6 +71,7 @@ FROM alpine:3.20
 RUN apk add --no-cache python3 iproute2
 EOF
 docker --context colima run --rm --privileged --network none \
+  -e FIPS_RA_REQUIRE_ROUTE_INFO=1 \
   -e FIPS_RA_BINARY=/workspace/apps/router-admin/target/aarch64-unknown-linux-musl/release/fips-router-admin \
   -v "$PWD:/workspace:ro" -w /workspace fips-ra-colima:local \
   python3 dev/lab/route_advertisement.py
