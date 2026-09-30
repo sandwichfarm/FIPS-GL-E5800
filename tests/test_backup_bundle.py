@@ -31,6 +31,14 @@ IDENTITY = {
     "etc/fips/router/settings.json": b'{"enabled":true}',
     "etc/fips/router/mesh.nft": b"table inet fips {}",
 }
+GUARD_FILES = {
+    "etc/fips-recovery/guard.sh": b"#!/bin/sh\n# FIPS_RECOVERY_LAYOUT=2\n",
+    "etc/fips-recovery/health.sh": b"#!/bin/sh\n",
+    "etc/fips-recovery/probes.json": b'{"name":"example.com"}\n',
+    "etc/fips-recovery/apply-initial.sh": b"#!/bin/sh\n",
+    "etc/fips-recovery/runtime-packages": b"python3\n",
+    "etc/init.d/fips-recovery": b"#!/bin/sh\n",
+}
 
 
 def archive(files: dict[str, bytes], extra: tarfile.TarInfo | None = None) -> bytes:
@@ -72,6 +80,8 @@ class BackupBundleTests(unittest.TestCase):
             inspect_plain(io.BytesIO(archive(CONFIG)), True)
         self.assertEqual(inspect_plain(io.BytesIO(archive(CONFIG | IDENTITY)), True),
                          set(CONFIG | IDENTITY))
+        self.assertEqual(read_plain(io.BytesIO(archive(CONFIG | IDENTITY | GUARD_FILES)), True),
+                         CONFIG | IDENTITY | GUARD_FILES)
 
     def test_rejects_links_and_unexpected_paths(self) -> None:
         link = tarfile.TarInfo("etc/fips/fips.key")
@@ -212,6 +222,40 @@ class BackupBundleTests(unittest.TestCase):
             self.assertEqual(read_plain(io.BytesIO(base64.b64decode(encoded)), False),
                              CONFIG | {"etc/config/wireless": b"wifi settings\n"})
             self.assertEqual(list(root.glob("fips-predeploy.*")), [])
+
+    @unittest.skipUnless(shutil.which("openssl"), "OpenSSL unavailable")
+    def test_upgrade_capture_includes_previous_guard_in_encrypted_backup_input(self) -> None:
+        import yaml
+        play = yaml.safe_load((Path(__file__).resolve().parents[1] / "ansible/deploy.yml").read_text())[0]
+        block = next(task["block"] for task in play["tasks"]
+                     if task["name"].startswith("Read the current router configuration"))
+        script = block[0]["ansible.builtin.raw"]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            expected = CONFIG | IDENTITY | GUARD_FILES
+            for name, content in expected.items():
+                target = root / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(content)
+            script = script.replace("mktemp /tmp/fips-predeploy.XXXXXX",
+                                    f"mktemp {shlex.quote(str(root / 'fips-predeploy.XXXXXX'))}")
+            substitutions = (
+                ("/etc/fips-recovery", root / "etc/fips-recovery"),
+                ("/etc/init.d/fips-recovery", root / "etc/init.d/fips-recovery"),
+                ("/etc/fips", root / "etc/fips"),
+                ("/root/dashboard/config.json", root / "root/dashboard/config.json"),
+            )
+            for index, (original, _) in enumerate(substitutions):
+                script = script.replace(original, f"FIPS_TEST_PATH_{index}")
+            for index, (_, replacement) in enumerate(substitutions):
+                script = script.replace(f"FIPS_TEST_PATH_{index}", shlex.quote(str(replacement)))
+            script = script.replace('tar -czf "$archive" -C / "$@"',
+                                    f'tar -czf "$archive" -C {shlex.quote(str(root))} "$@"')
+            process = subprocess.run(["sh", "-c", script], capture_output=True, check=True,
+                                     env=os.environ | {"COPYFILE_DISABLE": "1"})
+            marker, encoded = process.stdout.split(b"\n", 1)
+            self.assertEqual(marker, b"FIPS_PRESENT=1")
+            self.assertEqual(read_plain(io.BytesIO(base64.b64decode(encoded)), True), expected)
 
 
 if __name__ == "__main__":

@@ -180,6 +180,71 @@ esac
         self.run_guard("rollback", expected=1)
         self.assertEqual(self.log.read_text(), "remove gl-e5800-dashboard\ninstall fips\n")
 
+    def test_upgrade_rollback_restores_previous_guard_files_after_controller_loss(self) -> None:
+        recovery = self.etc / "fips-recovery"
+        files = {
+            recovery / "guard.sh": b"previous guard\n",
+            recovery / "health.sh": b"previous health\n",
+            recovery / "probes.json": b'{"name":"old.example"}\n',
+            recovery / "apply-initial.sh": b"previous apply\n",
+            recovery / "runtime-packages": b"python3\n",
+            self.etc / "init.d/fips-recovery":
+                b'#!/bin/sh\ncase "$1" in enabled|status) exit 0;; esac\nexit 1\n',
+        }
+        for path, original in files.items():
+            path.write_bytes(original)
+            path.chmod(0o700 if path.name.endswith(".sh") or path.name == "fips-recovery" else 0o600)
+            os.utime(path, (12345, 12345))
+        self.run_guard("arm", "tx1", "60")
+        for path in files:
+            path.write_bytes(b"replacement\n")
+            path.chmod(0o644)
+        expired = self.env | {"FIPS_TEST_NOW": "10061"}
+        self.assertIn("ROLLED_BACK tx1", self.run_guard("check", env=expired))
+        for path, original in files.items():
+            self.assertEqual(path.read_bytes(), original, path.as_posix())
+            self.assertEqual(path.stat().st_mode & 0o777,
+                             0o700 if path.name.endswith(".sh") or path.name == "fips-recovery" else 0o600)
+            self.assertEqual(int(path.stat().st_mtime), 12345)
+
+    def test_failed_guard_file_restore_keeps_rollback_pending_for_retry(self) -> None:
+        recovery = self.etc / "fips-recovery"
+        (recovery / "guard.sh").write_text("previous guard\n")
+        self.run_guard("arm", "tx1", "60")
+        (recovery / "guard.sh").write_text("replacement\n")
+        saved = recovery / "tx1/backup/guard-files/guard.sh"
+        saved.rename(saved.with_suffix(".missing"))
+        expired = self.env | {"FIPS_TEST_NOW": "10061"}
+        self.run_guard("check", expected=1, env=expired)
+        self.assertTrue((recovery / "pending").exists())
+        saved.with_suffix(".missing").rename(saved)
+        self.assertIn("ROLLED_BACK tx1", self.run_guard("check", env=expired))
+        self.assertEqual((recovery / "guard.sh").read_text(), "previous guard\n")
+
+    def test_upgrade_rollback_restarts_prior_watchdog_after_failed_candidate_start(self) -> None:
+        marker = self.root / "watchdog-running"
+        marker.touch()
+        init = self.etc / "init.d/fips-recovery"
+        init.write_text(
+            '#!/bin/sh\n'
+            'marker="$FIPS_TEST_FS_ROOT/watchdog-running"\n'
+            'case "$1" in\n'
+            '  enabled) exit 0;;\n'
+            '  status) test -e "$marker";;\n'
+            '  start) [ "${FIPS_TEST_RECOVERY_START_FAIL:-}" != yes ] || exit 1; touch "$marker";;\n'
+            '  *) exit 2;;\n'
+            'esac\n'
+        )
+        init.chmod(0o755)
+        self.run_guard("arm", "tx1", "60")
+        marker.unlink()
+        expired = self.env | {"FIPS_TEST_NOW": "10061"}
+        self.run_guard("check", expected=1,
+                       env=expired | {"FIPS_TEST_RECOVERY_START_FAIL": "yes"})
+        self.assertTrue((self.etc / "fips-recovery/pending").exists())
+        self.assertIn("ROLLED_BACK tx1", self.run_guard("check", env=expired))
+        self.assertTrue(marker.exists())
+
     def test_partially_unpacked_new_package_is_removed(self) -> None:
         self.run_guard("arm", "tx1", "60")
         self.state.write_text("fips\ngl-e5800-dashboard:unpacked\n")

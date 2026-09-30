@@ -26,7 +26,12 @@ OPTIONAL_FIPS_CONFIG = {
     "etc/fips/hosts", "etc/fips/peers.allow", "etc/fips/peers.deny",
     "etc/fips/fips.nft",
 }
-OPTIONAL_FILE = {"root/dashboard/config.json"}
+OPTIONAL_FILE = {
+    "root/dashboard/config.json",
+    "etc/fips-recovery/guard.sh", "etc/fips-recovery/health.sh",
+    "etc/fips-recovery/probes.json", "etc/fips-recovery/apply-initial.sh",
+    "etc/fips-recovery/runtime-packages", "etc/init.d/fips-recovery",
+}
 
 
 def restorable_fips_config(name: str) -> bool:

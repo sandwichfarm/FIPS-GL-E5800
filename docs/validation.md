@@ -348,8 +348,8 @@ guard, encrypts and verifies the guard evidence before cleanup, then captures
 and compares final inventory and configuration again. A read-only run against
 the untouched stock router returned `STOCK_ALREADY_CLEAN`; no cleanup was run
 on hardware. A second private offline kit containing these tools passed
-verification. The route is only prepared for a first installation; restoring
-an older preexisting guard on an upgrade is still an open edge. The latest
+verification. At that stage, the route covered only a first installation;
+restoring an older preexisting guard on an upgrade remained open. The latest
 `make check` passes 122 Python tests plus shell and Ansible syntax checks.
 The inventory now also fingerprints the stock web app bundle and touchscreen
 binary. Two read-only v2 inventories on the live router matched, and both
@@ -366,3 +366,24 @@ Python tests plus shell and Ansible syntax checks. A fresh private kit
 GL-E5800. Ordinary LAN internet, DNS, VPN, router administration, FIPS link,
 and physical screen operation must be checked before the first hardware
 confirmation. The controller intentionally keeps LAN gateway mode disabled.
+
+The upgrade rollback path now snapshots the installed guard's scripts, probes,
+runtime list and init script, then arms that existing watchdog before replacing
+any of those files. A legacy or incomplete guard, missing candidate runtime
+coverage, an old pending transaction, or staged temporary files block upgrade
+before writes. The encrypted predeploy archive also captures the prior guard;
+the post-firmware identity restore still excludes it. An isolated controller-loss
+test restores the old guard files and metadata; a failed restore retains the
+pending marker for retry. The installer now leaves the old watchdog process
+running through the upgrade deadline. A local fault test stops it before
+rollback, verifies a failed restart keeps the transaction pending, then
+verifies a successful retry starts the prior service. A separate upgrade
+finalizer compares encrypted
+configuration/guard backups and full inventories, archives transaction evidence
+off-router, removes only that transaction, and repeats both comparisons. Cleanup
+refuses a changed guard, metadata drift, a pending transaction, or a non-rollback
+result; its marker permits retry after interruption. `make check` passes 144
+Python tests, shell checks and Ansible syntax checks. A new private offline kit
+`guard_upgrade_watchdog_20260930` passes verification. These are local fixtures
+and archive checks. A real GL-E5800 upgrade, watchdog restart, rollback and
+same-state comparison remain untested, and guards without layout 2 are blocked.

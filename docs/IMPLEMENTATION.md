@@ -224,3 +224,12 @@ authorized plan after independent local work is finished.
   and dashboard settings before installing the router-local guard. Tests cover
   the capture stream and ordering. A real GL-E5800 backup and restoration
   rehearsal remain unverified until authorized hardware access.
+- A dedicated key and encrypted stock backup now exist privately, and the
+  same-state inventory/backup comparison has a read-only live baseline. For a
+  guarded upgrade, the playbook now arms a supported existing layout-2 guard
+  before replacing it, and the guard snapshots/restores its own managed files.
+  The encrypted predeploy backup includes those old guard files. A locally
+  tested upgrade finalizer encrypts rollback evidence, removes only the new
+  transaction, and repeats inventory/configuration comparisons. The first
+  hardware install, upgrade, rollback, internet/VPN checks and physical UI
+  verification still require explicit owner approval.

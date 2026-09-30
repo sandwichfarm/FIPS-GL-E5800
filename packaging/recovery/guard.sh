@@ -1,6 +1,7 @@
 #!/bin/sh
 # Router-local deployment guard. Install outside the replaceable FIPS packages.
 # Ansible stages previous IPKs and enables the boot service before calling arm.
+# FIPS_RECOVERY_LAYOUT=2
 set -u
 
 TEST_ROOT=${FIPS_TEST_FS_ROOT:-}
@@ -18,6 +19,7 @@ uptime() { if [ -n "${FIPS_TEST_UPTIME:-}" ]; then echo "$FIPS_TEST_UPTIME"; els
 boot_id() { if [ -n "${FIPS_TEST_BOOT_ID:-}" ]; then echo "$FIPS_TEST_BOOT_ID"; else cat /proc/sys/kernel/random/boot_id; fi; }
 valid_id() { case "$1" in ''|*[!A-Za-z0-9_-]*) return 1;; *) return 0;; esac; }
 valid_package() { case "$1" in ''|*[!A-Za-z0-9_.+-]*) return 1;; *) return 0;; esac; }
+file_metadata() { stat -c '%a:%u:%g:%Y' "$1" 2>/dev/null || stat -f '%Lp:%u:%g:%m' "$1"; }
 installed() {
     opkg status "$1" 2>/dev/null | awk -v name="$1" '
         /^Package:/ { selected=($2 == name) }
@@ -80,6 +82,61 @@ restore_display_service() {
         display_actual_running=stopped
     fi
     [ "$display_actual_enabled $display_actual_running" = "$display_enabled $display_running" ] || return 1
+}
+
+guard_file_path() {
+    case "$1" in
+        guard.sh|health.sh|probes.json|apply-initial.sh|runtime-packages)
+            printf '%s/%s\n' "$ROOT" "$1" ;;
+        init) printf '%s/init.d/fips-recovery\n' "$DEVICE_ETC" ;;
+        *) return 1 ;;
+    esac
+}
+
+snapshot_guard_files() {
+    guard_backup="$ROOT/$txn/backup/guard-files"
+    mkdir -p "$guard_backup" || return 1
+    chmod 0700 "$guard_backup" || return 1
+    for guard_name in guard.sh health.sh probes.json apply-initial.sh runtime-packages init; do
+        guard_source=$(guard_file_path "$guard_name") || return 1
+        [ ! -L "$guard_source" ] || return 1
+        if [ -e "$guard_source" ]; then
+            [ -f "$guard_source" ] || return 1
+            cp -p "$guard_source" "$guard_backup/$guard_name" || return 1
+            printf 'present\n' > "$guard_backup/$guard_name.state" || return 1
+        else
+            printf 'absent\n' > "$guard_backup/$guard_name.state" || return 1
+        fi
+        chmod 0600 "$guard_backup/$guard_name.state" || return 1
+    done
+}
+
+restore_guard_files() {
+    guard_backup="$ROOT/$txn/backup/guard-files"
+    [ -d "$guard_backup" ] && [ ! -L "$guard_backup" ] || return 1
+    for guard_name in guard.sh health.sh probes.json apply-initial.sh runtime-packages init; do
+        guard_target=$(guard_file_path "$guard_name") || return 1
+        [ ! -L "$guard_target" ] || return 1
+        guard_state=$(cat "$guard_backup/$guard_name.state" 2>/dev/null) || return 1
+        case "$guard_state" in
+            present)
+                [ -f "$guard_backup/$guard_name" ] && [ ! -L "$guard_backup/$guard_name" ] || return 1
+                rm -f "$guard_target.tmp" || return 1
+                cp -p "$guard_backup/$guard_name" "$guard_target.tmp" || return 1
+                mv -f "$guard_target.tmp" "$guard_target" || return 1
+                cmp -s "$guard_backup/$guard_name" "$guard_target" || return 1
+                [ "$(file_metadata "$guard_backup/$guard_name")" = "$(file_metadata "$guard_target")" ] || return 1
+                ;;
+            absent) rm -f "$guard_target" || return 1 ;;
+            *) return 1 ;;
+        esac
+    done
+    # An armed package transaction starts with a running, enabled watchdog.
+    service fips-recovery enabled >/dev/null 2>&1 || return 1
+    if ! service fips-recovery status >/dev/null 2>&1; then
+        service fips-recovery start >/dev/null 2>&1 || return 1
+    fi
+    service fips-recovery status >/dev/null 2>&1 || return 1
 }
 
 release_lock() {
@@ -188,6 +245,7 @@ arm() {
     fi
     chmod 0600 "$ROOT/$txn/backup/fips-service"
     if [ "$mode" = packages ]; then
+        snapshot_guard_files || fail 'cannot snapshot prior recovery guard'
         for display_name in gl_screen citydash homebutton; do
             record_display_service "$display_name" || fail "cannot snapshot $display_name state"
         done
@@ -366,6 +424,7 @@ rollback() {
         restore_display_service gl_screen || return 1
         restore_display_service citydash || return 1
         restore_display_service homebutton || return 1
+        restore_guard_files || return 1
     fi
     printf '%s\n' "ROLLED_BACK $txn" > "$ROOT/$txn/result"
     chmod 0600 "$ROOT/$txn/result"

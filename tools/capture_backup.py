@@ -26,6 +26,14 @@ REMOTE_ARCHIVE = """set -eu
 set -- etc/config
 if [ -d /etc/fips ]; then set -- "$@" etc/fips; fi
 if [ -f /root/dashboard/config.json ]; then set -- "$@" root/dashboard/config.json; fi
+if [ -f /etc/fips-recovery/guard.sh ]; then
+    for name in guard.sh health.sh probes.json apply-initial.sh runtime-packages; do
+        test -f "/etc/fips-recovery/$name" && test ! -L "/etc/fips-recovery/$name"
+        set -- "$@" "etc/fips-recovery/$name"
+    done
+    test -f /etc/init.d/fips-recovery && test ! -L /etc/init.d/fips-recovery
+    set -- "$@" etc/init.d/fips-recovery
+fi
 tar -czf - -C / "$@"
 """
 MAX_ENCODED_ARCHIVE = 48 * 1024 * 1024

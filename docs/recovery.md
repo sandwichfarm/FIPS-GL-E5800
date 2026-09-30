@@ -17,7 +17,8 @@ matching firmware fingerprint are not approval or hardware verification.
 ## Before any deployment
 
 1. Back up the router's `/etc/fips/` identity/configuration, dashboard settings,
-   the complete `/etc/config/` UCI tree, and the installed known-good IPKs to
+   the complete `/etc/config/` UCI tree, any existing recovery guard files, and
+   the installed known-good IPKs to
    encrypted private storage. Verify the backup can be decrypted. Do not commit keys,
    backups, router config, or passwords. Preserve the exact prior IPK and SHA-256
    for every already-installed component; the guard refuses to arm otherwise.
@@ -154,6 +155,60 @@ preexisting FIPS components. This path is locally tested, not yet run on the
 GL-E5800. Neither comparison proves LAN-client internet/VPN behavior,
 web rendering or the physical display; verify those separately before
 confirmation. Keep both captures and inventories out of Git.
+
+For an upgrade rollback, use the same fresh before/after encrypted captures and
+inventories above. When a recovery guard already exists, the capture now includes
+its five managed files and `/etc/init.d/fips-recovery`; the firmware identity
+restore does not replay those files. The deployment preflight accepts an existing
+guard only if it is the supported layout 2, running and enabled, has no pending
+or incomplete transaction, and covers every candidate touchscreen dependency.
+It stages the exact prior IPKs and arms that old guard before replacing any guard
+file. The old watchdog process stays running during the deadline; a reboot
+loads the new on-disk guard. If rollback finds the watchdog stopped, it
+restores and starts the prior service before clearing the pending marker.
+The router-local rollback restores the prior guard files as well as the
+prior packages, network configuration, identity and display state. A guard
+without layout 2 is blocked before deployment until a separate migration is
+reviewed.
+
+After a completed upgrade rollback, inspect the retained transaction and run
+the read-only cleanup preflight with the same `TRIAL` from the baseline commands:
+
+```sh
+python3 tools/finalize_upgrade_rollback.py \
+  --ssh-key private/ssh/gl-e5800_ed25519 \
+  --before-backup "private/predeploy/backups/$TRIAL-before.age" \
+  --after-backup "private/predeploy/backups/$TRIAL-after.age" \
+  --before-inventory "private/predeploy/inventory/$TRIAL-before.json" \
+  --identity private/predeploy/age-identity.txt --transaction "$TRIAL"
+```
+
+It requires identical package, service and stock-UI inventory plus matching
+configuration and prior guard bytes/metadata. Only `UPGRADE_CLEANUP_READY`
+allows the cleanup step. Keep the router accessible while the evidence is
+encrypted and checked off-router:
+
+```sh
+python3 tools/finalize_upgrade_rollback.py \
+  --ssh-key private/ssh/gl-e5800_ed25519 \
+  --before-backup "private/predeploy/backups/$TRIAL-before.age" \
+  --after-backup "private/predeploy/backups/$TRIAL-after.age" \
+  --before-inventory "private/predeploy/inventory/$TRIAL-before.json" \
+  --identity private/predeploy/age-identity.txt --transaction "$TRIAL" \
+  --apply \
+  --recipient "$(age-keygen -y private/predeploy/age-identity.txt)" \
+  --evidence-output "private/predeploy/backups/$TRIAL-guard.age" \
+  --final-backup "private/predeploy/backups/$TRIAL-final.age" \
+  --final-inventory "private/predeploy/inventory/$TRIAL-final.json"
+```
+
+`UPGRADE_STATE_RESTORED` means the final encrypted capture and inventory again
+match the predeployment baseline. If cleanup was interrupted, retain the same
+verified evidence archive and use new final backup/inventory filenames on retry;
+the cleanup marker makes transaction-file removal resumable. This path is tested
+only against isolated router fixtures. Actual OpenWrt watchdog replacement,
+package rollback, LAN/VPN behavior and touchscreen recovery remain hardware
+acceptance checks before declaring a deployment safe.
 
 Example local variable shape (replace every placeholder with reviewed evidence):
 

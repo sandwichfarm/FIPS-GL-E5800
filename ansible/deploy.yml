@@ -150,6 +150,59 @@
       ansible.builtin.include_role:
         name: prerequisites
 
+    - name: Classify a prior recovery guard before router writes
+      ansible.builtin.raw: |
+        set -eu
+        if [ -e /etc/fips-recovery/guard.sh ] || [ -L /etc/fips-recovery/guard.sh ]; then
+          for name in guard.sh health.sh probes.json apply-initial.sh runtime-packages; do
+            test -f "/etc/fips-recovery/$name"
+            test ! -L "/etc/fips-recovery/$name"
+          done
+          test -f /etc/init.d/fips-recovery
+          test ! -L /etc/init.d/fips-recovery
+          test "$(stat -c %a /etc/fips-recovery)" = 700
+          test ! -e /etc/fips-recovery/{{ recovery_transaction }}
+          test ! -L /etc/fips-recovery/{{ recovery_transaction }}
+          for path in /etc/fips-recovery/*.tmp /etc/fips-recovery/.cleanup-* /etc/init.d/fips-recovery.tmp; do
+            test ! -e "$path" && test ! -L "$path"
+          done
+          grep -qx '# FIPS_RECOVERY_LAYOUT=2' /etc/fips-recovery/guard.sh
+          test ! -e /etc/fips-recovery/pending
+          test "$(/bin/sh /etc/fips-recovery/guard.sh status)" = NONE
+          /etc/init.d/fips-recovery enabled >/dev/null
+          /etc/init.d/fips-recovery status >/dev/null
+          {% if 'device_ui' in restore_components %}
+          while IFS= read -r package; do
+            grep -Fxq "$package" /etc/fips-recovery/runtime-packages || {
+              echo "Existing guard does not cover candidate runtime package: $package" >&2
+              exit 1
+            }
+          done <<'FIPS_CANDIDATE_RUNTIME'
+        {{ ((lookup('file', playbook_dir + '/../upstream/vendor/runtime.json') | from_json).remove_order | join('\n')) }}
+        FIPS_CANDIDATE_RUNTIME
+          {% endif %}
+          echo GUARDED_UPGRADE
+        else
+          test ! -e /etc/fips-recovery
+          test ! -L /etc/fips-recovery
+          test ! -e /etc/init.d/fips-recovery
+          test ! -L /etc/init.d/fips-recovery
+          for package in fips gl-sdk4-ui-fips gl-e5800-dashboard; do
+            if opkg status "$package" 2>/dev/null | grep -q '^Package:'; then
+              echo "An installed FIPS component has no rollback guard: $package" >&2
+              exit 1
+            fi
+          done
+          echo FIRST_INSTALL
+        fi
+      register: guard_install_state
+      changed_when: false
+      check_mode: false
+
+    - name: Record guard installation path
+      ansible.builtin.set_fact:
+        existing_recovery_guard: "{{ 'GUARDED_UPGRADE' in guard_install_state.stdout }}"
+
     - name: Require a private off-router backup destination before router writes
       ansible.builtin.assert:
         that:
@@ -180,6 +233,14 @@
             fi
             if [ -f /root/dashboard/config.json ]; then
               set -- "$@" root/dashboard/config.json
+            fi
+            if [ -f /etc/fips-recovery/guard.sh ]; then
+              for name in guard.sh health.sh probes.json apply-initial.sh runtime-packages; do
+                test -f "/etc/fips-recovery/$name" && test ! -L "/etc/fips-recovery/$name"
+                set -- "$@" "etc/fips-recovery/$name"
+              done
+              test -f /etc/init.d/fips-recovery && test ! -L /etc/init.d/fips-recovery
+              set -- "$@" etc/init.d/fips-recovery
             fi
             tar -czf "$archive" -C / "$@"
             tar -tzf "$archive" >/dev/null
@@ -216,10 +277,31 @@
     - name: Install with a router-local rollback guard
       when: not ansible_check_mode
       block:
+        - name: Stage exact prior packages before changing an existing guard
+          ansible.builtin.include_tasks: stage_previous.yml
+          loop: "{{ known_good_artifacts | dict2items }}"
+          loop_control:
+            loop_var: prior_component
+          when: existing_recovery_guard
+
+        - name: Arm the existing guard before replacing its files
+          ansible.builtin.raw: >-
+            /bin/sh /etc/fips-recovery/guard.sh arm
+            {{ recovery_transaction | quote }} {{ recovery_seconds | int }}
+          register: prior_recovery_arm
+          changed_when: "'ARMED ' in prior_recovery_arm.stdout"
+          when: existing_recovery_guard
+
         - name: Install and start boot-persistent recovery guard
           ansible.builtin.raw: |
             set -eu
+            {% if existing_recovery_guard %}
+            test -f /etc/fips-recovery/pending
+            read -r pending_id _ < /etc/fips-recovery/pending
+            test "$pending_id" = {{ recovery_transaction | quote }}
+            {% else %}
             test ! -e /etc/fips-recovery/pending
+            {% endif %}
             umask 077
             mkdir -p /etc/fips-recovery
             chmod 0700 /etc/fips-recovery
@@ -227,11 +309,13 @@
             decode > /etc/fips-recovery/guard.sh.tmp <<'FIPS_GUARD_PAYLOAD'
             {{ lookup('file', playbook_dir + '/../packaging/recovery/guard.sh') | b64encode }}
             FIPS_GUARD_PAYLOAD
+            /bin/sh -n /etc/fips-recovery/guard.sh.tmp
             mv /etc/fips-recovery/guard.sh.tmp /etc/fips-recovery/guard.sh
             chmod 0700 /etc/fips-recovery/guard.sh
             decode > /etc/fips-recovery/health.sh.tmp <<'FIPS_HEALTH_PAYLOAD'
             {{ lookup('file', playbook_dir + '/../packaging/recovery/health.sh') | b64encode }}
             FIPS_HEALTH_PAYLOAD
+            /bin/sh -n /etc/fips-recovery/health.sh.tmp
             mv /etc/fips-recovery/health.sh.tmp /etc/fips-recovery/health.sh
             chmod 0700 /etc/fips-recovery/health.sh
             decode > /etc/fips-recovery/probes.json.tmp <<'FIPS_PROBES'
@@ -242,6 +326,7 @@
             decode > /etc/fips-recovery/apply-initial.sh.tmp <<'FIPS_INITIAL_SCRIPT'
             {{ lookup('file', playbook_dir + '/../packaging/recovery/apply-initial.sh') | b64encode }}
             FIPS_INITIAL_SCRIPT
+            /bin/sh -n /etc/fips-recovery/apply-initial.sh.tmp
             mv /etc/fips-recovery/apply-initial.sh.tmp /etc/fips-recovery/apply-initial.sh
             chmod 0700 /etc/fips-recovery/apply-initial.sh
             {% if 'device_ui' in restore_components %}
@@ -256,25 +341,33 @@
             decode > /etc/init.d/fips-recovery.tmp <<'FIPS_INIT_PAYLOAD'
             {{ lookup('file', playbook_dir + '/../packaging/recovery/fips-recovery.init') | b64encode }}
             FIPS_INIT_PAYLOAD
+            /bin/sh -n /etc/init.d/fips-recovery.tmp
             mv /etc/init.d/fips-recovery.tmp /etc/init.d/fips-recovery
             chmod 0755 /etc/init.d/fips-recovery
+            {% if not existing_recovery_guard %}
             /etc/init.d/fips-recovery enable
             /etc/init.d/fips-recovery restart
+            {% else %}
+            # Keep the old watchdog process alive through the upgrade deadline.
+            /etc/init.d/fips-recovery enabled
+            {% endif %}
             /etc/init.d/fips-recovery status
           changed_when: true
 
-        - name: Stage exact prior packages for every currently installed component
+        - name: Stage exact prior packages for a first installation
           ansible.builtin.include_tasks: stage_previous.yml
           loop: "{{ known_good_artifacts | dict2items }}"
           loop_control:
             loop_var: prior_component
+          when: not existing_recovery_guard
 
-        - name: Arm local deadline before any candidate package installation
+        - name: Arm new local guard before any candidate package installation
           ansible.builtin.raw: >-
             /bin/sh /etc/fips-recovery/guard.sh arm
             {{ recovery_transaction | quote }} {{ recovery_seconds | int }}
           register: recovery_arm
           changed_when: "'ARMED ' in recovery_arm.stdout"
+          when: not existing_recovery_guard
 
         - name: Install pinned offline dashboard runtime inside the rollback window
           ansible.builtin.include_role:
@@ -373,8 +466,54 @@
 
       rescue:
         - name: Roll back immediately after a failed local deployment step
-          ansible.builtin.raw: /bin/sh /etc/fips-recovery/guard.sh rollback
-          when: recovery_arm is defined and 'ARMED ' in recovery_arm.stdout | default('')
+          ansible.builtin.raw: |
+            set -eu
+            if /bin/sh /etc/fips-recovery/guard.sh rollback; then
+              exit 0
+            fi
+            {% if existing_recovery_guard %}
+            /bin/sh /etc/fips-recovery/{{ recovery_transaction }}/backup/guard-files/guard.sh rollback
+            {% else %}
+            exit 1
+            {% endif %}
+          when: >-
+            (prior_recovery_arm is defined and 'ARMED ' in prior_recovery_arm.stdout | default('')) or
+            (recovery_arm is defined and 'ARMED ' in recovery_arm.stdout | default(''))
+          ignore_errors: true
+
+        - name: Remove incomplete first-install guard before any package change
+          ansible.builtin.raw: |
+            set -eu
+            test ! -e /etc/fips-recovery/pending
+            for package in fips gl-sdk4-ui-fips gl-e5800-dashboard; do
+              ! opkg status "$package" 2>/dev/null | grep -q '^Package:'
+            done
+            if [ -x /etc/init.d/fips-recovery ]; then
+              /etc/init.d/fips-recovery disable || true
+              /etc/init.d/fips-recovery stop || true
+            fi
+            for link in /etc/rc.d/*fips-recovery; do
+              if [ -e "$link" ] || [ -L "$link" ]; then rm -f "$link"; fi
+            done
+            rm -f /etc/init.d/fips-recovery /etc/init.d/fips-recovery.tmp
+            rm -rf /etc/fips-recovery /tmp/fips-recovery
+            sync
+            echo FIRST_INSTALL_BOOTSTRAP_CLEAN
+          when:
+            - not existing_recovery_guard
+            - recovery_arm is not defined or 'ARMED ' not in recovery_arm.stdout | default('')
+          ignore_errors: true
+
+        - name: Remove prior-package staging after an unarmed upgrade failure
+          ansible.builtin.raw: |
+            set -eu
+            test ! -e /etc/fips-recovery/pending
+            test ! -e /etc/fips-recovery/{{ recovery_transaction }}/result
+            rm -rf /etc/fips-recovery/{{ recovery_transaction }}
+            echo PRIOR_STAGING_CLEAN
+          when:
+            - existing_recovery_guard
+            - prior_recovery_arm is not defined or 'ARMED ' not in prior_recovery_arm.stdout | default('')
           ignore_errors: true
 
         - name: Report failed deployment and autonomous rollback status
