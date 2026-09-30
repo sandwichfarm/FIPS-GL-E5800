@@ -198,12 +198,15 @@ authorized plan after independent local work is finished.
   service state need repair. Disabling a previously active gateway marks the
   operation changed; a repeated restore leaves services alone. These behaviors
   pass fake-service tests and remain unverified on OpenWrt.
-- The touchscreen package now declares all five zoneinfo regions used by the
-  dashboard; a package test checks the exact dependency set. Its Pillow feed
-  conflict remains unresolved. No candidate
-  package is approved for hardware installation. A dedicated read-only
-  dependency inspector is prepared to collect opkg file ownership and Python
-  import paths once SSH access works. The latest read-only SSH attempt was
-  denied authentication, so current firmware and dependency state remain
-  unconfirmed. Browser rendering inside the vendor shell and complete
-  gateway/client behavior also remain unverified.
+- Read-only SSH confirmed the router still runs GL 4.10.0/OpenWrt 23.05.4,
+  with the pinned web and stock-screen hashes. The stock screen package owns
+  `/usr/lib/libfreetype.so.6.20.4` and its symlinks. The feed's Pillow IPK
+  depends on a FreeType package that would overwrite that library. The new
+  ARM64 dashboard IPK bundles only Pillow's Python payload under a private
+  path, declares its remaining runtime dependencies and pins the exact stock
+  screen version. Ansible checks the stock library hash and symlink before
+  deployment. A local ARM64 emulation test rendered with the router's musl
+  loader and FreeType 2.14.1; hardware rendering and service behavior remain
+  unverified. The router currently has no IPv6 default route and LAN RA is
+  disabled, so optional LAN gateway activation remains blocked by preflight
+  until a separately reviewed IPv6 configuration is available.

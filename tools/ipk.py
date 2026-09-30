@@ -9,7 +9,15 @@ from pathlib import Path, PurePosixPath
 import re
 import shlex
 import struct
+import sys
 import tarfile
+
+TOOLS = Path(__file__).resolve().parent
+if str(TOOLS) not in sys.path:
+    sys.path.insert(0, str(TOOLS))
+from vendor_pillow import payload as vendor_pillow_payload
+
+VENDOR_PILLOW, _ = vendor_pillow_payload()
 
 NAMES = {"fips": "fips", "web_ui": "gl-sdk4-ui-fips", "device_ui": "gl-e5800-dashboard"}
 FIPS_BINARIES = {"usr/bin/fips", "usr/bin/fipsctl", "usr/bin/fips-gateway", "usr/bin/fips-router-admin"}
@@ -34,13 +42,14 @@ REQUIRED_CANDIDATE_FILES = {
         "root/dashboard/dashboard.py", "root/dashboard/button_watch.py",
         "root/dashboard/run.sh", "root/dashboard/screen_sleep.sh",
         "root/dashboard/toggle.sh",
-    },
+    } | set(VENDOR_PILLOW),
 }
 REQUIRED_CANDIDATE_DEPENDENCIES = {
     "fips": {"kmod-tun", "ip-full"},
     "web_ui": {"fips"},
     "device_ui": {
-        "python3", "python3-numpy", "python3-pillow", "libtiff6",
+        "gl-sdk4-screen-large (= git-2026.237.10575-dd8a031-1)",
+        "python3", "python3-numpy", "libjpeg", "libtiff6", "zlib", "libwebp",
         "zoneinfo-europe", "zoneinfo-asia", "zoneinfo-america",
         "zoneinfo-australia-nz", "zoneinfo-pacific",
     },
@@ -52,6 +61,10 @@ ALLOWED_DIRS = {
     for component, files in ALLOWED_FILES.items()
 }
 ALLOWED_DIRS["device_ui"].update({"root", "root/dashboard"})
+ALLOWED_DIRS["device_ui"].update(
+    str(parent) for name in VENDOR_PILLOW for parent in PurePosixPath(name).parents
+    if str(parent) != "."
+)
 DEVICE_CONTROL_SCRIPTS = {
     name: Path(__file__).resolve().parents[1] / "packaging/device-ui/control" / name
     for name in ("postinst", "prerm")
@@ -61,6 +74,8 @@ DEVICE_CONTROL_SCRIPTS = {
 def check_payload_path(component, name, directory):
     if directory:
         allowed = name == "." or name in ALLOWED_DIRS[component]
+    elif component == "device_ui" and name in VENDOR_PILLOW:
+        allowed = True
     elif component == "device_ui" and re.fullmatch(r"root/dashboard/[A-Za-z0-9_-]+\.(?:py|sh)", name):
         allowed = True
     else:
@@ -139,8 +154,9 @@ def inspect(path, sha256, component, candidate=False):
                     raise ValueError("Candidate control script differs from reviewed source: " + name)
     if metadata.get("Package") != NAMES[component]:
         raise ValueError("Package name is not allowed for component " + component)
-    required_arch = "aarch64_cortex-a53" if component == "fips" else "all"
-    if metadata.get("Architecture") != required_arch:
+    allowed_arch = ({"aarch64_cortex-a53"} if component == "fips" or (component == "device_ui" and candidate)
+                    else {"all", "aarch64_cortex-a53"} if component == "device_ui" else {"all"})
+    if metadata.get("Architecture") not in allowed_arch:
         raise ValueError("Package architecture is not supported on this router")
     if not re.fullmatch(r"[A-Za-z0-9.+:~_-]+", metadata.get("Version", "")):
         raise ValueError("Invalid package version")
@@ -149,6 +165,8 @@ def inspect(path, sha256, component, candidate=False):
         missing = REQUIRED_CANDIDATE_DEPENDENCIES[component] - declared
         if missing:
             raise ValueError("Candidate package is missing dependencies: " + ", ".join(sorted(missing)))
+        if component == "device_ui" and declared & {"python3-pillow", "libfreetype", "libfreetype6"}:
+            raise ValueError("Dashboard candidate would replace the stock screen's FreeType library")
     checks = []
     fips_present = set()
     payload_files = set()
@@ -165,6 +183,8 @@ def inspect(path, sha256, component, candidate=False):
             if entry.isfile():
                 payload_files.add(name)
                 content = data.extractfile(entry).read()
+                if component == "device_ui" and name in VENDOR_PILLOW and content != VENDOR_PILLOW[name][0]:
+                    raise ValueError("Bundled Pillow file differs from pinned feed payload: " + name)
                 if component == "fips" and name in FIPS_BINARIES:
                     check_aarch64_elf(content, name)
                     fips_present.add(name)

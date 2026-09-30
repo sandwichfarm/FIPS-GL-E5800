@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parent.parent
 VERSIONS = {
     "fips": ("fips", "0.5.2-1", "aarch64_cortex-a53"),
     "web_ui": ("gl-sdk4-ui-fips", "0.1.0-1", "all"),
-    "device_ui": ("gl-e5800-dashboard", "3.2.1-1", "all"),
+    "device_ui": ("gl-e5800-dashboard", "3.2.1-2", "aarch64_cortex-a53"),
 }
 
 
@@ -131,13 +131,18 @@ def build(component: str, binary_dir: Path | None, epoch: int) -> tuple[str, byt
     if component == "device_ui":
         sys.path.insert(0, str(ROOT / "dev"))
         from device_ui_patch import render
+        from vendor_pillow import payload as pillow_payload
         name = "root/dashboard/dashboard.py"
         _, mode = files[name]
         files[name] = (render().encode(), mode)
+        pillow_files, pillow_record = pillow_payload()
+        if files.keys() & pillow_files.keys():
+            raise ValueError("Pillow payload overlaps dashboard files")
+        files.update(pillow_files)
     dependencies = {
         "fips": "kmod-tun, ip-full",
         "web_ui": "fips",
-        "device_ui": "python3, python3-numpy, python3-pillow, libtiff6, zoneinfo-europe, zoneinfo-asia, zoneinfo-america, zoneinfo-australia-nz, zoneinfo-pacific",
+        "device_ui": "gl-sdk4-screen-large (= git-2026.237.10575-dd8a031-1), python3, python3-numpy, libjpeg, libtiff6, zlib, libwebp, zoneinfo-europe, zoneinfo-asia, zoneinfo-america, zoneinfo-australia-nz, zoneinfo-pacific",
     }[component]
     control = (f"Package: {package}\nVersion: {version}\nArchitecture: {architecture}\n"
                "Maintainer: GL-E5800 local integration\nSection: net\nPriority: optional\n"
@@ -165,6 +170,8 @@ def build(component: str, binary_dir: Path | None, epoch: int) -> tuple[str, byt
                               "device_ui": "Python 3.9+ deterministic tar builder"}[component]}
     if build_stamp is not None:
         manifest["build_provenance"] = build_stamp
+    if component == "device_ui":
+        manifest["bundled_dependency"] = pillow_record
     return f"{package}_{version}_{architecture}.ipk", outer, manifest
 
 

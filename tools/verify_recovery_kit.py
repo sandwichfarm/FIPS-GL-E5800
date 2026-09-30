@@ -19,7 +19,7 @@ from backup_bundle import read_encrypted, validate_gateway_ipv6_probe
 PACKAGES = {
     "fips": "fips_0.5.2-1_aarch64_cortex-a53.ipk",
     "web_ui": "gl-sdk4-ui-fips_0.1.0-1_all.ipk",
-    "device_ui": "gl-e5800-dashboard_3.2.1-1_all.ipk",
+    "device_ui": "gl-e5800-dashboard_3.2.1-2_aarch64_cortex-a53.ipk",
 }
 SOURCES = {
     "fips": "components/fips",
@@ -40,11 +40,12 @@ REQUIRED_KIT_FILES = {
     "packaging/recovery/guard.sh", "packaging/recovery/health.sh",
     "packaging/recovery/apply-initial.sh", "packaging/recovery/fips-recovery.init",
     "packaging/device-ui/control/postinst", "packaging/device-ui/control/prerm",
-    "tools/ipk.py", "tools/build_provenance.py",
+    "tools/ipk.py", "tools/build_provenance.py", "tools/vendor_pillow.py",
     "tools/backup_bundle.py", "tools/capture_backup.py", "tools/stage_backup.py",
     "tools/render_backup_restore.py", "private/deploy.yml",
     "private/identity-config-backup.age", "upstream/sources.json",
-    "upstream/targets.json",
+    "upstream/targets.json", "upstream/vendor/pillow.json",
+    "upstream/vendor/python3-pillow_9.5.0-2_aarch64_cortex-a53.ipk",
 }
 
 
@@ -135,6 +136,10 @@ def verify(kit: Path, identity: Path | None = None) -> None:
         if package_manifest.get("target_device") != target:
             raise ValueError(f"Candidate target profile differs from kit: {component}")
         info, _ = inspect(kit / relative, item["sha256"], component, candidate=True)
+        if (info["package"] != package_manifest.get("package")
+                or info["version"] != package_manifest.get("version")
+                or info["architecture"] != package_manifest.get("architecture")):
+            raise ValueError(f"Candidate metadata differs from kit manifest: {component}")
         payload = {path.lstrip("/"): digest for check in info["checks"] for digest, path in [check.split(None, 1)]}
         if payload != package_manifest["payload"]:
             raise ValueError(f"Candidate payload differs from manifest: {component}")
@@ -142,6 +147,11 @@ def verify(kit: Path, identity: Path | None = None) -> None:
             verify_record(package_manifest.get("build_provenance"), payload, current=False)
             if package_manifest["build_provenance"]["source"] != package_manifest["source"]:
                 raise ValueError("FIPS build source differs from package source")
+        if component == "device_ui":
+            from vendor_pillow import payload as vendor_pillow_payload
+            _, record = vendor_pillow_payload()
+            if package_manifest.get("bundled_dependency") != record:
+                raise ValueError("Dashboard bundled Pillow source differs from kit")
     for component, item in profile.get("known_good_artifacts", {}).items():
         if component not in PACKAGES or item["path"] != f"previous/{component}.ipk":
             raise ValueError(f"Known-good path is not kit-local: {component}")

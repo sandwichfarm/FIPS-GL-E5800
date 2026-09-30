@@ -106,6 +106,16 @@ class PackageTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "outside approved component paths"):
             ipk.inspect(path, digest, "device_ui")
 
+    def test_prior_touchscreen_accepts_both_package_architectures(self):
+        for architecture in ("all", "aarch64_cortex-a53"):
+            control = f"Package: gl-e5800-dashboard\nVersion: 1\nArchitecture: {architecture}\n".encode()
+            blob = archive({"debian-binary": b"2.0\n", "control.tar.gz": archive({"control": control}),
+                            "data.tar.gz": archive({"root/dashboard/dashboard.py": b"# prior dashboard\n"})})
+            path = self.root / f"prior-{architecture}.ipk"
+            path.write_bytes(blob)
+            info, _ = ipk.inspect(path, hashlib.sha256(blob).hexdigest(), "device_ui")
+            self.assertEqual(info["architecture"], architecture)
+
     def test_identity_key_payload_rejected(self):
         path, digest = self.package_with_payload("fips", "etc/fips/identity.key")
         with self.assertRaisesRegex(ValueError, "outside approved component paths"):
@@ -122,7 +132,7 @@ class PackageTests(unittest.TestCase):
             ipk.inspect(path, hashlib.sha256(blob).hexdigest(), "web_ui", candidate=True)
 
     def test_candidate_rejects_changed_touchscreen_script(self):
-        control = b"Package: gl-e5800-dashboard\nVersion: 1\nArchitecture: all\n"
+        control = b"Package: gl-e5800-dashboard\nVersion: 1\nArchitecture: aarch64_cortex-a53\n"
         blob = archive({"debian-binary": b"2.0\n",
                         "control.tar.gz": archive({"control": control,
                                                    "postinst": ipk.DEVICE_CONTROL_SCRIPTS["postinst"].read_bytes(),
@@ -160,8 +170,8 @@ class PackageTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "missing dependencies: fips"):
             ipk.inspect(path, hashlib.sha256(blob).hexdigest(), "web_ui", candidate=True)
 
-    def test_touchscreen_candidate_cannot_omit_pillow_dependency(self):
-        control = (b"Package: gl-e5800-dashboard\nVersion: 1\nArchitecture: all\n"
+    def test_touchscreen_candidate_requires_stock_screen_dependency(self):
+        control = (b"Package: gl-e5800-dashboard\nVersion: 1\nArchitecture: aarch64_cortex-a53\n"
                    b"Depends: python3, python3-numpy\n")
         scripts = {name: source.read_bytes() for name, source in ipk.DEVICE_CONTROL_SCRIPTS.items()}
         blob = archive({
@@ -171,7 +181,7 @@ class PackageTests(unittest.TestCase):
         })
         path = self.root / "no-pillow-dependency.ipk"
         path.write_bytes(blob)
-        with self.assertRaisesRegex(ValueError, "missing dependencies: .*python3-pillow"):
+        with self.assertRaisesRegex(ValueError, "missing dependencies: .*gl-sdk4-screen-large"):
             ipk.inspect(path, hashlib.sha256(blob).hexdigest(), "device_ui", candidate=True)
 
     def test_fips_candidate_requires_gateway_runtime(self):

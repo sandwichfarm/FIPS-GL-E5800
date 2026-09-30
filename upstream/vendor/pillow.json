@@ -1,0 +1,11 @@
+{
+  "package": "python3-pillow",
+  "version": "9.5.0-2",
+  "architecture": "aarch64_cortex-a53",
+  "url": "https://fw.gl-inet.com/releases/sdx72_v1.2/rg650v/packages/aarch64_cortex-a53/packages/python3-pillow_9.5.0-2_aarch64_cortex-a53.ipk",
+  "sha256": "af4bfbb0766923ca55deeb0e6e24e916982247a5b8f2a0f0a41834f24be768ea",
+  "license": "HPND",
+  "stock_screen_package": "git-2026.237.10575-dd8a031-1",
+  "stock_freetype_path": "/usr/lib/libfreetype.so.6.20.4",
+  "stock_freetype_sha256": "cc5c4e7e52f9278b334248b924d49ea169c3a80d5dba2b1a5929404ffe93e6bb"
+}

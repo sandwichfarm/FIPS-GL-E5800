@@ -163,17 +163,17 @@ candidate IPKs with their manifests. The pinned FIPS upstream revision is
 reported by `.cache/openwrt-bin/fips --version` inside the development image.
 For focused UI work, pass `--component web_ui` or `--component device_ui`.
 
-The touchscreen candidate declares `python3-pillow` as a dependency. On this
-firmware, the feed package reportedly conflicts with a file owned by
-`gl-sdk4-screen-large`. This conflict must be resolved with compatible package
-ownership before deployment. Do not bypass dependency checks. Run
-`make inspect-dependencies` when read-only router access is available to collect
-installed versions, the stock screen's FreeType file ownership, cached Pillow,
-`libfreetype`, and `libfreetype6` feed metadata, Python import paths, and an
-in-memory Pillow render
-probe. Feed metadata and a passing render probe do not
-prove that package payload files do not conflict; review file ownership and
-the exact feed IPK before changing the touchscreen dependency or installing it.
+The touchscreen package privately bundles the pinned `python3-pillow` 9.5.0
+payload from the 4.10.0 GL.iNet feed. It does not depend on or install the
+feed IPK: that package depends on `libfreetype`, whose payload collides with
+the stock `gl-sdk4-screen-large` library. The private payload is loaded only
+by the dashboard launcher. The package requires the exact stock screen version;
+Ansible checks its FreeType symlink and SHA-256 before installation. A local
+ARM64 emulation test rendered a TrueType glyph using the router's musl loader
+and stock FreeType. This is an ABI compatibility check, not a hardware service
+test. Keep the pinned IPK, source record, and bundled license together. Run
+`make inspect-dependencies` for a fresh read-only dependency report after any
+firmware update.
 
 `ansible/deploy.yml` stages known-good IPKs and arms the router-local rollback
 guardian before any package change. It leaves successful installs pending until

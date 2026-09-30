@@ -44,10 +44,13 @@ class DeterministicPackageTests(unittest.TestCase):
             inspected, _ = ipk.inspect(artifact, manifest["sha256"], "device_ui", candidate=True)
             declared = set(inspected["depends"].split(", "))
             self.assertEqual(declared, {
-                "python3", "python3-numpy", "python3-pillow", "libtiff6",
+                "gl-sdk4-screen-large (= git-2026.237.10575-dd8a031-1)",
+                "python3", "python3-numpy", "libjpeg", "libtiff6", "zlib", "libwebp",
                 "zoneinfo-europe", "zoneinfo-asia", "zoneinfo-america",
                 "zoneinfo-australia-nz", "zoneinfo-pacific",
             })
+            self.assertEqual(inspected["architecture"], "aarch64_cortex-a53")
+            self.assertIn("root/dashboard/vendor/PIL/_imagingft.cpython-311-aarch64-linux-musl.so", manifest["payload"])
 
     def test_fips_package_repeats_and_preserves_payload(self):
         with tempfile.TemporaryDirectory() as temporary:

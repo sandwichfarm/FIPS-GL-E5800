@@ -54,7 +54,11 @@
 
 - name: Check touchscreen interfaces
   ansible.builtin.raw: |
+    set -eu
     test -c /dev/fb0 && test -c /dev/input/event0 && test -c /dev/input/event1
+    test "$(opkg status gl-sdk4-screen-large | sed -n 's/^Version: //p')" = git-2026.237.10575-dd8a031-1
+    test "$(readlink /usr/lib/libfreetype.so.6)" = libfreetype.so.6.20.4
+    echo 'cc5c4e7e52f9278b334248b924d49ea169c3a80d5dba2b1a5929404ffe93e6bb  /usr/lib/libfreetype.so.6.20.4' | sha256sum -c -
   changed_when: false
   check_mode: false
   when: "'device_ui' in restore_components"

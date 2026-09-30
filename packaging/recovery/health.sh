@@ -121,7 +121,7 @@ case ",$components," in
     *,device_ui,*)
         dashboard="$ROOT/root/dashboard/dashboard.py"
         test -s "$dashboard" || fail 'dashboard source missing'
-        PYTHONDONTWRITEBYTECODE=1 python3 -B -c '
+        PYTHONPATH="$ROOT/root/dashboard/vendor${PYTHONPATH:+:$PYTHONPATH}" PYTHONDONTWRITEBYTECODE=1 python3 -B -c '
 import ast, sys
 from PIL import Image, ImageDraw, ImageFont, _imagingft
 import numpy

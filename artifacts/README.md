@@ -23,7 +23,11 @@ manifest, and the compatibility manifest. Both files remain absent until a
 complete candidate stack passes verification.
 
 The touchscreen package declares all five regional zoneinfo dependencies and
-`python3-pillow`. Installation remains blocked pending a compatible Pillow
-package on the actual GL-E5800; never bypass opkg dependency checks. Register
+bundles a checksum-pinned copy of the vendor feed's Pillow 9.5.0 Python payload
+under the dashboard's private path. It does not install the feed package or its
+conflicting `libfreetype` dependency. The package requires the exact stock
+screen version and verifies its FreeType hash before deployment. ARM64 emulation
+passed a TrueType render using the router's musl loader and stock FreeType, but
+OpenWrt service operation is still unverified. Register
 only reviewed candidate and exact known-good IPK paths and SHA-256 values in an
 ignored private Ansible profile. Do not register stock UI packages as candidates.

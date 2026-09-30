@@ -215,3 +215,26 @@ audit. It reproduced the same three IPK hashes above with provenance schema 2,
 which hashes the ARM64 build recipe without invalidating FIPS for web-only Make
 changes. Its compatibility manifest generated successfully. Hardware and hosted
 CI gates remain open.
+
+Read-only SSH after the firmware update confirmed GL 4.10.0/OpenWrt 23.05.4,
+kernel 5.15.170-perf, and both pinned stock UI fingerprints. The installed
+`gl-sdk4-screen-large` package is `git-2026.237.10575-dd8a031-1` and owns
+`/usr/lib/libfreetype.so.6.20.4` (SHA-256
+`cc5c4e7e52f9278b334248b924d49ea169c3a80d5dba2b1a5929404ffe93e6bb`).
+The vendor feed's `python3-pillow` 9.5.0-2 depends on `libfreetype` 2.11.1-1,
+which owns the same SONAME path as the stock screen. No package was installed.
+The router currently has no IPv6 default route or active LAN /64 and has
+`dhcp.lan.ra=disabled`; the gateway preflight correctly blocks activation in
+that state.
+
+The revised touchscreen IPK `gl-e5800-dashboard_3.2.1-2_aarch64_cortex-a53.ipk`
+has SHA-256 `d2ba1d04d3c5cdc2f1421a40722aeaafa63bbff1c0b7d5819dd236a7adfd35e3`.
+It bundles the checksum-pinned vendor Pillow Python payload privately, with
+no FreeType file or feed Pillow dependency. A local ARM64 container ran the
+packaged payload's Pillow 9.5.0 TrueType render with the copied router musl
+loader, stock FreeType 2.14.1 and stock screen font. This proves the tested
+local ABI path; it does not prove `opkg` installation or display service
+operation on the router. The current 94-test Python suite and Ansible syntax
+checks pass. Both full-stack and post-firmware identity offline-kit smoke
+checks pass after relocating the kit. All three IPKs and the compatibility
+manifest verify locally. Hardware deployment and hosted CI remain outstanding.

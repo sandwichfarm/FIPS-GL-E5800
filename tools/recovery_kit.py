@@ -37,6 +37,7 @@ COPIES = (
     "packaging/device-ui/control/postinst",
     "packaging/device-ui/control/prerm",
     "tools/ipk.py",
+    "tools/vendor_pillow.py",
     "tools/build_provenance.py",
     "tools/backup_bundle.py",
     "tools/capture_backup.py",
@@ -46,6 +47,8 @@ COPIES = (
     "tools/verify_recovery_kit.py",
     "upstream/sources.json",
     "upstream/targets.json",
+    "upstream/vendor/pillow.json",
+    "upstream/vendor/python3-pillow_9.5.0-2_aarch64_cortex-a53.ipk",
 )
 
 

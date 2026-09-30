@@ -13,7 +13,7 @@ ARTIFACTS = ROOT / "artifacts"
 EXPECTED = {
     "fips": "fips_0.5.2-1_aarch64_cortex-a53.ipk",
     "web_ui": "gl-sdk4-ui-fips_0.1.0-1_all.ipk",
-    "device_ui": "gl-e5800-dashboard_3.2.1-1_all.ipk",
+    "device_ui": "gl-e5800-dashboard_3.2.1-2_aarch64_cortex-a53.ipk",
 }
 
 
@@ -36,7 +36,8 @@ def verify(component=None, announce=True) -> None:
         package = ARTIFACTS / filename
         manifest = json.loads((ARTIFACTS / (filename + ".json")).read_text())
         info, _ = inspect(package, manifest["sha256"], selected, candidate=True)
-        if info["version"] != manifest["version"] or info["package"] != manifest["package"]:
+        if (info["version"] != manifest["version"] or info["package"] != manifest["package"]
+                or info["architecture"] != manifest["architecture"]):
             raise ValueError(f"Manifest disagrees with package: {filename}")
         if manifest.get("source") != sources[source_paths[selected]]:
             raise ValueError(f"Artifact source record is stale: {filename}")
@@ -51,6 +52,11 @@ def verify(component=None, announce=True) -> None:
         if selected == "fips":
             from build_provenance import verify_record
             verify_record(manifest.get("build_provenance"), actual_payload)
+        if selected == "device_ui":
+            from vendor_pillow import payload as vendor_pillow_payload
+            _, record = vendor_pillow_payload()
+            if manifest.get("bundled_dependency") != record:
+                raise ValueError("Bundled Pillow source record is stale")
         if announce:
             print(f"{selected}: {manifest['sha256']}")
 
