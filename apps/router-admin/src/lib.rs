@@ -833,10 +833,25 @@ impl Backend {
             .mode(0o600)
             .open(self.state_dir.join("lock"))
             .map_err(|_| "state_unavailable")?;
-        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-            return Err("configuration_busy");
+        for attempt in 0..=20 {
+            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+                return Ok(file);
+            }
+            let error = std::io::Error::last_os_error();
+            if (error.kind() == std::io::ErrorKind::WouldBlock
+                || error.kind() == std::io::ErrorKind::Interrupted)
+                && attempt < 20
+            {
+                std::thread::sleep(Duration::from_millis(10));
+                continue;
+            }
+            return Err(if error.kind() == std::io::ErrorKind::WouldBlock {
+                "configuration_busy"
+            } else {
+                "state_unavailable"
+            });
         }
-        Ok(file)
+        unreachable!()
     }
 }
 
@@ -963,6 +978,20 @@ mod tests {
             system_root: root.path().to_path_buf(),
             package_activation_allowed: false,
         }
+    }
+
+    #[test]
+    fn configuration_lock_waits_briefly_for_previous_writer() {
+        let root = TempDir::new().unwrap();
+        let backend = backend(&root);
+        let held = backend.lock().unwrap();
+        let next = std::thread::scope(|scope| {
+            let waiting = scope.spawn(|| backend.lock());
+            std::thread::sleep(Duration::from_millis(30));
+            drop(held);
+            waiting.join().unwrap()
+        });
+        assert!(next.is_ok());
     }
 
     fn fake_activation_commands(root: &TempDir, fail_nft: bool) {

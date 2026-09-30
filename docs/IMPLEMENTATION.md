@@ -62,7 +62,7 @@ authorized plan after independent local work is finished.
   locally. Locked npm installation succeeds inside the pinned Node image.
 - The original package restore flow was made check-only; guarded deployment
   and configuration activation now use a separate router-local watchdog.
-- Rust backend: all 21 tests pass in Docker. Authenticated CGI: 5 tests pass;
+- Rust backend: all 22 tests pass in Docker. Authenticated CGI: 5 tests pass;
   web panel/API: 5 tests pass.
   The backend previously read live lab daemon status and peer list.
 - Two ARM64 Linux containers establish FIPS UDP links through separate network

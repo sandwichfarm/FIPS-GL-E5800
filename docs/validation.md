@@ -37,7 +37,7 @@ after a failed start; LAN client and router hardware behavior are unverified.
 A two-container Linux FIPS mesh connected and passed IPv6 ping after a
 forced node restart while keeping the same identity. Fake-opkg tests exercise
 the new local rollback guard under timeout, reboot, checksum failure, config-only
-activation and explicit confirmation. All 21 Rust backend tests pass in the
+activation and explicit confirmation. All 22 Rust backend tests pass in the
 pinned Docker environment; formatting and Clippy pass. The pinned Rust 1.94.1
 and Zig 0.13.0 container built all four static ARM64 binaries and stamped their
 source provenance. All three candidate IPKs pass payload, manifest, and source
@@ -52,6 +52,9 @@ configuration on either failure. Both synthetic offline-kit smoke paths pass,
 including age encryption and post-firmware identity restore. Neither CI nor
 the guarded deployment has been run against the
 router, and firmware/UI compatibility remains unapproved.
+The configuration lock now retries transient `EAGAIN` for up to 200 ms before
+returning `configuration_busy`; a lock-release test and 50 repeated parallel
+Rust-suite runs passed after the change.
 An isolated-filesystem rehearsal of the post-firmware restore script preserved
 the synthetic FIPS key and active settings, did not replay older network files
 or a stale staged candidate, rejected a mismatched guard transaction, and made
