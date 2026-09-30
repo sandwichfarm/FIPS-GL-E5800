@@ -88,6 +88,18 @@ initial_fips_settings:
   mesh_udp_ports: []
 ```
 
+For a first hardware link test, the [official FIPS tutorial](https://learn.fips.network/lessons/13-try-it)
+publishes `fips-test-node` at UDP `217.77.8.91:2121`, with npub
+`npub1qmc3cvfz0yu2hx96nq3gp55zdan2qclealn7xshgr448d3nh6lks7zel98`.
+The [peer discovery page](https://join.fips.network/) lists other nodes.
+Recheck the endpoint immediately before use; public availability is not a
+deployment guarantee. The pinned local FIPS binary established a link to the
+test node from an isolated Docker container on 2026-09-30. The router's own
+UDP path remains untested. Put the chosen peer only in the ignored private
+deployment profile, and keep `gateway_enabled: false` on the current router:
+its observed WAN has no IPv6 default route and LAN RA is disabled. The
+router-node test does not require changes to existing LAN or WAN settings.
+
 For a firmware update that removed an existing FIPS installation, replace
 `initial_fips_settings` with the reviewed, decryptable backup and its local
 age identity. These options are mutually exclusive:

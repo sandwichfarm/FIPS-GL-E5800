@@ -234,7 +234,15 @@ no FreeType file or feed Pillow dependency. A local ARM64 container ran the
 packaged payload's Pillow 9.5.0 TrueType render with the copied router musl
 loader, stock FreeType 2.14.1 and stock screen font. This proves the tested
 local ABI path; it does not prove `opkg` installation or display service
-operation on the router. The current 94-test Python suite and Ansible syntax
+operation on the router. The current 95-test Python suite and Ansible syntax
 checks pass. Both full-stack and post-firmware identity offline-kit smoke
 checks pass after relocating the kit. All three IPKs and the compatibility
 manifest verify locally. Hardware deployment and hosted CI remain outstanding.
+
+The [official public FIPS test node](https://learn.fips.network/lessons/13-try-it)
+was reachable from a fresh local Docker FIPS node on 2026-09-30: the daemon
+reported an active peer and a nonzero link count over UDP `217.77.8.91:2121`.
+The first run exposed a local test-harness issue because Docker Desktop bind
+mounts could not host the Unix control socket; moving that socket to the
+container's `/tmp` made the control query pass. This is an external peer
+link check from the controller's network, not a router connectivity test.
