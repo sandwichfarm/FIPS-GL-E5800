@@ -193,8 +193,12 @@ arm() {
     mode=${3:-packages}
     valid_id "$txn" || fail 'invalid transaction ID'
     case "$mode" in packages|config_only) ;; *) fail 'invalid transaction mode';; esac
-    case "$seconds" in *[!0-9]*|'') fail 'invalid deadline';; esac
-    [ "$seconds" -ge 60 ] && [ "$seconds" -le 900 ] || fail 'deadline must be 60..900 seconds'
+    if [ "$seconds" = manual ]; then
+        [ "$mode" = packages ] || fail 'manual rollback is supported only for package transactions'
+    else
+        case "$seconds" in *[!0-9]*|'') fail 'invalid deadline';; esac
+        [ "$seconds" -ge 60 ] && [ "$seconds" -le 900 ] || fail 'deadline must be 60..900 seconds'
+    fi
     [ ! -e "$PENDING" ] || fail 'another deployment is pending'
     [ -d "$ROOT/$txn/previous" ] || fail 'known-good directory missing'
     [ -x "$DEVICE_ETC/init.d/fips-recovery" ] || fail 'boot guard is missing'
@@ -276,8 +280,13 @@ arm() {
     done
     echo "$(now) $(uptime) $(boot_id)" > "$ROOT/$txn/backup/armed-at"
     chmod 0600 "$ROOT/$txn/backup/armed-at"
-    wall_limit=$(($(now) + seconds))
-    uptime_limit=$(($(uptime) + seconds))
+    if [ "$seconds" = manual ]; then
+        wall_limit=0
+        uptime_limit=0
+    else
+        wall_limit=$(($(now) + seconds))
+        uptime_limit=$(($(uptime) + seconds))
+    fi
     original_boot=$(boot_id)
     printf '%s %s %s %s\n' "$txn" "$wall_limit" "$uptime_limit" "$original_boot" > "$PENDING.tmp" || fail 'cannot arm guard'
     chmod 0600 "$PENDING.tmp"
@@ -434,6 +443,8 @@ rollback() {
 }
 
 deadline_expired() {
+    # A manual package transaction never rolls back on time or reboot.
+    [ "$wall_limit" != 0 ] || return 1
     [ "$(boot_id)" != "$original_boot" ] ||
     [ "$(now)" -ge "$wall_limit" ] ||
     [ "$(uptime)" -ge "$uptime_limit" ]
@@ -474,6 +485,6 @@ case "${1:-}" in
     rollback) require_lock; rollback;;
     confirm) shift; require_lock; confirm "$@";;
     watch) watch;;
-    status) if [ -e "$PENDING" ]; then read_pending || fail 'invalid pending marker'; echo "PENDING $txn $wall_limit"; else echo NONE; fi;;
-    *) fail 'usage: guard.sh arm ID SECONDS | check | rollback | confirm ID | watch | status';;
+    status) if [ -e "$PENDING" ]; then read_pending || fail 'invalid pending marker'; if [ "$wall_limit" = 0 ]; then echo "PENDING $txn MANUAL"; else echo "PENDING $txn $wall_limit"; fi; else echo NONE; fi;;
+    *) fail 'usage: guard.sh arm ID SECONDS|manual | check | rollback | confirm ID | watch | status';;
 esac

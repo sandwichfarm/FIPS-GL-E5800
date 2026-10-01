@@ -1,9 +1,10 @@
 # Proposed GL-E5800 hardware trial
 
-**Status:** preparation only. The owner has not approved router writes. This
-plan does not authorize deployment, firmware flashing, a reset, or deliberate
-loss of router connectivity. Use [the recovery runbook](recovery.md) for the
-exact backup, rollback, comparison, and rescue commands.
+**Status:** the owner approved Stage A only, with manual rollback and no timer.
+Stage B, firmware flashing, reset, and deliberate loss of router connectivity
+are not approved. Use [the recovery runbook](recovery.md) for the exact backup,
+rollback, comparison, and rescue commands. If SSH is lost during Stage A,
+there is no automatic recovery; physical intervention may be required.
 
 The last successful read-only inventory (2026-10-01) matched GL.iNet 4.10.0,
 OpenWrt 23.05.4, `aarch64_cortex-a53`, all installed packages and service
@@ -13,8 +14,8 @@ before a trial; refuse any changed target until it is reviewed. The candidate
 stack is `fips` 0.5.2-1, `gl-sdk4-ui-fips` 0.1.0-1, and
 `gl-e5800-dashboard` 3.2.1-2. Verify all IPKs, provenance, offline runtime,
 and [the compatibility manifest](../artifacts/compatibility.json) again before
-use. The current private profile is a check-only fixture, not deployment
-authorization.
+use. The ignored private Stage A profile selects `deployment_recovery_mode:
+manual`; the checked-in fixture remains check-only.
 
 The current check-only fixture selects UDP peer
 `npub1qmc3cvfz0yu2hx96nq3gp55zdan2qclealn7xshgr448d3nh6lks7zel98` at
@@ -22,7 +23,7 @@ The current check-only fixture selects UDP peer
 immediately before requesting approval; the profile can be changed locally
 without changing router state.
 
-## Stage A: prove stock rollback, after explicit owner approval
+## Stage A: prove manual stock rollback
 
 1. Verify controller access to SSH and Docker; run the local checks and the
    read-only Ansible check with the reviewed target. Capture a fresh encrypted
@@ -34,17 +35,19 @@ without changing router state.
    reached through the VPN.
 2. Prepare a separate, ignored deployment profile from the reviewed fixture.
    Pin the three verified IPKs and exact firmware profile, use the selected
-   reachable FIPS peer, set `gateway_enabled: false`, and keep the local guard
-   deadline at 600 seconds. Review the generated offline recovery kit and
+   reachable FIPS peer, set `gateway_enabled: false`, and select manual-only
+   rollback with no deadline. Review the generated offline recovery kit and
    confirm a person can access the physical router throughout the trial.
 3. Install the candidate stack with Ansible. The router-local guard must be
    armed before any package or network change. Do **not** confirm this first
    transaction. While pending, check the FIPS peer link, authenticated web UI,
    physical touchscreen and return button. From the same LAN client, check
    unchanged gateway and DNS, ordinary HTTPS, VPN resource, and router admin.
-   Any failed check triggers immediate rollback; otherwise allow the deadline
-   to restore stock. No controller-loss or WAN interruption is induced on this
-   in-use router.
+   If a check fails, run `/bin/sh /etc/fips-recovery/guard.sh rollback`
+   manually as soon as SSH is available. After recording successful checks,
+   run the same manual rollback command and verify the stock state. Neither a
+   timer nor a reboot rolls back Stage A. No controller-loss or WAN interruption
+   is induced on this in-use router.
 4. Capture another encrypted backup and inventory. Require the stock screen,
    original packages/services, router administration, LAN internet, DNS, and
    VPN to work. Use the read-only stock rollback preflight, archive guard

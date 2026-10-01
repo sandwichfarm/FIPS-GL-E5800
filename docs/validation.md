@@ -439,3 +439,16 @@ multi-node lifecycle smoke: Compose occasionally saw a SIGKILLed node as still
 running, then waited for that old container to exit with code 137. The smoke
 now explicitly recreates only that node before checking its persisted identity
 and mesh reconnection.
+
+For the owner-approved Stage A, the first-install package guard now accepts an
+explicit `manual` mode. Isolated tests prove that neither an expired clock nor
+a new boot ID rolls it back, while the explicit rollback command removes the
+candidate packages and restores the saved network file. Ansible refuses manual
+mode for upgrades and skips its automatic failed-play rollback in manual mode.
+`make check` passes 153 Python tests and the shell/Ansible syntax checks.
+The ignored Stage A profile, verified encrypted stock backup and offline kit
+`stagea_manual_ready_20261001` are prepared. The 2026-10-01 pretrial inventory
+matches the stock baseline, and the LAN client passed gateway, DNS, HTTPS,
+Mullvad exit, router SSH and router-origin Tailscale peer probes. These are
+predeployment observations; post-install and physical touchscreen checks remain
+hardware acceptance criteria.

@@ -168,13 +168,21 @@ class GuardUpgradeTests(unittest.TestCase):
                              not existing)
             self.assertEqual("bootstrap_cleanup" in rendered_install, not existing)
 
+        manual_install = jinja.from_string(install["ansible.builtin.raw"]).render(
+            variables | {"existing_recovery_guard": False,
+                         "deployment_recovery_mode": "manual"})
+        self.assertIn("tx1 manual", manual_install)
+        self.assertNotIn("tx1 300", manual_install)
+        self.assertEqual(subprocess.run(["sh", "-n"], input=manual_install,
+                                        text=True, capture_output=True).returncode, 0)
+
     def test_rescue_covers_both_armed_paths_and_cleans_unarmed_bootstrap(self) -> None:
         play = yaml.safe_load((ROOT / "ansible/deploy.yml").read_text())[0]
         transaction = next(task for task in play["tasks"]
                            if task["name"] == "Install with a router-local rollback guard")
         rescue = transaction["rescue"]
         rollback = rescue[0]
-        self.assertNotIn("when", rollback)
+        self.assertEqual(rollback["when"], "deployment_recovery_mode != 'manual'")
         self.assertIn("recovery_guard_install", rescue[1]["when"][1])
         jinja = Environment()
         jinja.filters["quote"] = shlex.quote
@@ -189,6 +197,21 @@ class GuardUpgradeTests(unittest.TestCase):
         bootstrap = rescue[1]["ansible.builtin.script"]
         self.assertIn("packaging/recovery/cleanup-bootstrap.sh", bootstrap["cmd"])
         self.assertEqual(bootstrap["executable"], "/bin/sh")
+
+    def test_manual_mode_is_first_install_only_and_has_no_auto_rollback(self) -> None:
+        play = yaml.safe_load((ROOT / "ansible/deploy.yml").read_text())[0]
+        tasks = play["tasks"]
+        manual_gate = next(task for task in tasks
+                           if task["name"] == "Require first installation for manual-only rollback")
+        self.assertEqual(manual_gate["when"], "deployment_recovery_mode == 'manual'")
+        self.assertIn("not existing_recovery_guard", manual_gate["ansible.builtin.assert"]["that"])
+        transaction = next(task for task in tasks
+                           if task["name"] == "Install with a router-local rollback guard")
+        install = next(task for task in transaction["block"]
+                       if task["name"] == "Install and start boot-persistent recovery guard")
+        self.assertIn("'manual' if deployment_recovery_mode", install["ansible.builtin.raw"])
+        self.assertEqual(transaction["rescue"][0]["when"],
+                         "deployment_recovery_mode != 'manual'")
 
     def test_first_install_bootstrap_cleans_on_disconnect_before_arming(self) -> None:
         play = yaml.safe_load((ROOT / "ansible/deploy.yml").read_text())[0]

@@ -166,6 +166,30 @@ esac
         rebooted = self.env | {"FIPS_TEST_BOOT_ID": "boot-b", "FIPS_TEST_UPTIME": "1"}
         self.assertIn("ROLLED_BACK tx1", self.run_guard("check", env=rebooted))
 
+    def test_manual_package_transaction_waits_until_explicit_rollback(self) -> None:
+        self.state.write_text("")
+        self.run_guard("arm", "tx1", "manual")
+        self.assertIn("PENDING tx1 MANUAL", self.run_guard("status"))
+        self.state.write_text("fips\ngl-sdk4-ui-fips\n")
+        (self.etc / "config/network").write_text("candidate network")
+        late_and_rebooted = self.env | {
+            "FIPS_TEST_NOW": "999999", "FIPS_TEST_UPTIME": "1",
+            "FIPS_TEST_BOOT_ID": "boot-b",
+        }
+        self.assertEqual(self.run_guard("check", env=late_and_rebooted), "")
+        self.assertEqual(self.run_guard("status", env=late_and_rebooted).strip(),
+                         "PENDING tx1 MANUAL")
+        self.assertEqual(self.state.read_text(), "fips\ngl-sdk4-ui-fips\n")
+        self.assertEqual((self.etc / "config/network").read_text(), "candidate network")
+        self.assertIn("ROLLED_BACK tx1", self.run_guard("rollback", env=late_and_rebooted))
+        self.assertEqual(self.state.read_text(), "")
+        self.assertEqual((self.etc / "config/network").read_text(), "original network")
+        self.assertEqual(self.run_guard("status").strip(), "NONE")
+
+    def test_manual_mode_rejects_config_transaction(self) -> None:
+        self.run_guard("arm", "tx1", "manual", "config_only", expected=1)
+        self.assertFalse((self.etc / "fips-recovery/pending").exists())
+
     def test_interrupted_install_rolls_back_without_controller(self) -> None:
         self.run_guard("arm", "tx1", "60")
         # Simulate controller loss after removing FIPS and installing only the dashboard.

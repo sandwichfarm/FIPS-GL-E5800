@@ -39,6 +39,7 @@
           - recovery_transaction is match('^[A-Za-z0-9_-]+$')
           - recovery_seconds | int >= 60
           - recovery_seconds | int <= 900
+          - deployment_recovery_mode in ['timed', 'manual']
           - recovery_min_root_kib | int >= 131072
           - recovery_min_tmp_kib | int >= 131072
           - recovery_probe_ip is defined
@@ -207,6 +208,12 @@
     - name: Record guard installation path
       ansible.builtin.set_fact:
         existing_recovery_guard: "{{ 'GUARDED_UPGRADE' in guard_install_state.stdout }}"
+
+    - name: Require first installation for manual-only rollback
+      ansible.builtin.assert:
+        that: not existing_recovery_guard
+        fail_msg: Manual-only rollback is supported only for a first installation; upgrades require the timed guard.
+      when: deployment_recovery_mode == 'manual'
 
     - name: Refuse known-good IPKs on an unguarded first installation
       ansible.builtin.assert:
@@ -399,7 +406,7 @@
             chmod 0700 /etc/fips-recovery/{{ recovery_transaction }} \
               /etc/fips-recovery/{{ recovery_transaction }}/previous
             /bin/sh /etc/fips-recovery/guard.sh arm \
-            {{ recovery_transaction | quote }} {{ recovery_seconds | int }}
+            {{ recovery_transaction | quote }} {{ ('manual' if deployment_recovery_mode | default('timed') == 'manual' else (recovery_seconds | string)) | quote }}
             arm_status=$(/bin/sh /etc/fips-recovery/guard.sh status)
             set -- $arm_status
             test "$1" = PENDING
@@ -498,11 +505,18 @@
         - name: Leave transaction pending for independent interface checks
           ansible.builtin.debug:
             msg: >-
+              {% if deployment_recovery_mode == 'manual' %}
+              Packages passed automated checks and remain pending until you run
+              /bin/sh /etc/fips-recovery/guard.sh rollback or explicitly confirm.
+              No deadline or reboot will roll back this transaction. Verify the
+              web and touchscreen interfaces, then manually roll back Stage A.
+              {% else %}
               Packages passed automated checks but remain under the router-local
               rollback deadline. Verify the web and touchscreen interfaces,
               then run ansible/confirm.yml with interface_health_verified=true
               before the {{ recovery_seconds }}-second deadline. Otherwise the
               router rolls back automatically.
+              {% endif %}
 
       rescue:
         - name: Roll back immediately after a failed local deployment step
@@ -517,6 +531,7 @@
             exit 1
             {% endif %}
           ignore_errors: true
+          when: deployment_recovery_mode != 'manual'
 
         - name: Remove incomplete first-install guard before any package change
           ansible.builtin.script:
@@ -543,4 +558,12 @@
 
         - name: Report failed deployment and autonomous rollback status
           ansible.builtin.fail:
-            msg: Deployment failed. Check /etc/fips-recovery/{{ recovery_transaction }}/result on the router; its watchdog rolls back after the deadline or reboot if SSH was lost.
+            msg: >-
+              {% if deployment_recovery_mode == 'manual' %}
+              Deployment failed. If /etc/fips-recovery/pending exists, run
+              /bin/sh /etc/fips-recovery/guard.sh rollback manually. No timer or
+              reboot performs rollback. If the guard was not armed, inspect the
+              bootstrap cleanup result and restore from the encrypted backup.
+              {% else %}
+              Deployment failed. Check /etc/fips-recovery/{{ recovery_transaction }}/result on the router; its watchdog rolls back after the deadline or reboot if SSH was lost.
+              {% endif %}

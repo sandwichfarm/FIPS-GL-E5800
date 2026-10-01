@@ -4,8 +4,8 @@ This workspace builds three separate packages: the FIPS daemon/management binary
 a GL.iNet web extension, and the community replacement touchscreen dashboard.
 The stock web and touchscreen applications are proprietary captures, not source
 packages. Do not replay their files across firmware versions. The rollback,
-encrypted backup, and offline-kit paths have local tests; hardware deployment
-remains unapproved and unverified.
+encrypted backup, and offline-kit paths have local tests; Stage A hardware
+deployment is approved for a manual-only trial but remains unverified.
 The proposed two-stage owner-approved hardware trial is in
 [hardware-trial.md](hardware-trial.md).
 
@@ -49,7 +49,10 @@ matching firmware fingerprint are not approval or hardware verification.
    On a first installation, guard upload, service start and deadline arming run
    in one SSH command. Its exit/HUP/TERM trap removes the new guard if the
    command fails before arming; after arming, the router-local watchdog owns
-   rollback. A local signal-injection test covers that handoff. A power loss
+   rollback in timed mode. For the approved manual-only Stage A, the pending
+   marker remains until an operator calls `guard.sh rollback` or confirms it;
+   the guard does not roll back on timeout or reboot. A local signal-injection
+   test covers that handoff. A power loss
    or untrappable process kill during the pre-arm interval can still leave
    partial guard files, though no candidate package or network change has
    begun. Inspect and clean that state before retrying; it is not a completed
@@ -259,6 +262,9 @@ predeploy_backup:
 # address that responds to ping from this router.
 # recovery_probe_ipv6: '2606:4700:4700::1111'
 recovery_seconds: 300
+# Optional for a first-install package trial only. No timeout, reboot, or
+# failed-play rescue automatically rolls back a pending transaction.
+# deployment_recovery_mode: manual
 fips_required_link_count: 1
 initial_fips_settings:
   enabled: true
@@ -519,8 +525,10 @@ not yet observed running on GitHub.
   network, daemon, web and screen checks. The guard restores prior IPKs and the
   saved identity/config and predeployment screen state. For a first installation,
   this is the stock screen.
-- If SSH is lost, wait for the guard's deadline and reconnect. A reboot also
-  makes a pending transaction roll back on boot. Do not overwrite the stock
+- If SSH is lost during a **timed** transaction, wait for the guard's deadline
+  and reconnect; reboot also triggers rollback. During **manual-only Stage A**,
+  neither happens: recover management access using the model-specific paths
+  below, then run the explicit rollback command. Do not overwrite the stock
   `/www` tree or `gl_screen` binary with an old capture.
 - If management returns but networking remains broken, use the GL-E5800's
   documented **4-second soft reset** to repair network connectivity while
