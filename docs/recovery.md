@@ -329,9 +329,10 @@ reachable peer. Ansible stages and activates them under the same package guard.
 For an upgrade with existing enabled settings, omit this key to preserve the
 current configuration. After a firmware update that erased those settings,
 use `recovery_backup` to restore the original identity before checking links.
-A failed validation or missing live link rolls back the
-whole package transaction. The 300-second example may be too short for a first
-peer link; review the 60–900 second deadline before deployment.
+A failed validation or missing live link blocks confirmation. Timed mode then
+rolls back; in manual-only Stage A, the operator must run rollback explicitly.
+The 300-second example may be too short for a first peer link in timed mode;
+review the 60–900 second deadline before deployment.
 
 Gateway mode currently requires an existing IPv6 default route and LAN Router
 Advertisements. It does not force a new default route or assign the upstream
@@ -371,16 +372,17 @@ ansible-playbook ansible/deploy.yml --ask-pass -e @ansible/vars/local.yml -e rec
 
 The playbook installs the guard outside the three replaceable packages, enables
 its early boot service, stages known-good IPKs, backs up live identity and network
-configuration in mode-0700 router storage, then arms a 60–900 second deadline.
+configuration in mode-0700 router storage, then arms either a 60–900 second
+deadline or an explicit manual-only first-install transaction.
 Before those router writes, it captures all current UCI files, FIPS identity and
 configuration when present, and dashboard settings into a verified encrypted
 backup on the controller. The age identity stays outside Git and the offline
 kit. Keep this off-router backup after confirmation: the router-local guard
-automatically rolls back only while its transaction remains pending.
+automatically rolls back a pending transaction only in timed mode.
 Before starting the transaction, have a LAN client ready and record its current
 default gateway, DNS resolver, access to an ordinary HTTPS site, and access to
 a resource reached through the existing VPN. Use that same client and those
-same destinations during the rollback deadline. A router-side ping cannot
+same destinations while the transaction is pending. A router-side ping cannot
 substitute for these client checks.
 Only then does it install packages. If selected, it switches the touchscreen
 to the community dashboard while the guard is armed. It checks SSH, `ubus`,
@@ -389,14 +391,14 @@ display and its button watcher is running. It also checks web gzip integrity,
 the CGI's rejected-request response, dashboard Python syntax, and in-memory
 Pillow rendering, but **leaves the transaction pending**. Check the
 admin page and physically check the selected touchscreen UI while the guard is
-armed. Before confirmation, verify on that LAN client that its default gateway
+armed. Before confirmation or Stage A manual rollback, verify on that LAN client that its default gateway
 and DNS resolver are unchanged, the ordinary HTTPS site and VPN resource still
 work, and router administration is reachable. Also verify the FIPS peer link,
-web controls, touchscreen status and return button. If any check fails or the
-deadline is too close, do not confirm: let the router-local deadline roll back
-or request immediate rollback, then compare the encrypted configuration backup
-and package/service inventory against the pretrial captures. After all checks
-pass, confirm from the same local controller:
+web controls, touchscreen status and return button. If any check fails, do not
+confirm: run rollback explicitly in manual mode, or request immediate rollback
+in timed mode, then compare the encrypted configuration backup and package/service
+inventory against the pretrial captures. After all checks pass in a deployment
+intended to remain installed, confirm from the same local controller:
 
 ```sh
 ansible-playbook ansible/confirm.yml --ask-pass -e @ansible/vars/local.yml -e recovery_transaction=unique_reviewed_id -e interface_health_verified=true
@@ -408,9 +410,9 @@ selected package and touchscreen runtime state.
 It also compares the controller's selected component set with the set saved on
 the router when the guard was installed; a narrowed confirmation profile cannot
 skip FIPS or interface checks.
-The guard rejects confirmation at or after its wall-clock or uptime deadline,
-or after a reboot, even if the watchdog has not run yet. The pending transaction
-then remains available for local rollback.
+In timed mode, the guard rejects confirmation at or after its wall-clock or
+uptime deadline, or after a reboot, even if the watchdog has not run yet. The
+pending transaction then remains available for local rollback.
 Guard operations take an exclusive lock in root-owned `/tmp/fips-recovery`.
 A concurrent confirmation
 or manual rollback fails rather than racing an active rollback; retry after the
@@ -418,15 +420,16 @@ current operation finishes. The boot watchdog clears a lock whose process has
 died, then retries pending rollback. Reboot also clears the temporary lock.
 The `interface_health_verified` flag is an operator attestation, not an automated
 visual test. Without confirmation, controller loss, reboot, or deadline expiry
-triggers router-local rollback. A failed deployment task requests immediate
-rollback. Review `/etc/fips-recovery/<ID>/result` and actual network/UI state
+triggers router-local rollback only in timed mode. A failed deployment task
+requests immediate rollback only in timed mode; manual-only Stage A leaves a
+pending transaction for explicit rollback. Review `/etc/fips-recovery/<ID>/result` and actual network/UI state
 after any failure; don't equate an Ansible exit code with full recovery. Guard
 fault tests cover timeout, reboot, interrupted install, bad checksum, and
 confirmation using fake opkg; actual OpenWrt rollback remains a hardware
 acceptance test.
 The local interrupted-install test includes an opkg `unpacked` state. If
 removing that partial package fails, the guard keeps the transaction pending
-and retries on its next watchdog check; an operator must inspect the recorded
+and retries on its next watchdog check in timed mode; an operator must inspect the recorded
 result and package state if the retry cannot complete.
 The guard records whether `gl_screen`, `citydash`, and `homebutton` were enabled
 and running before arming. After package restoration it restores those states,
