@@ -28,6 +28,14 @@ ROOT = Path(__file__).resolve().parents[1]
 CLEANUP = ROOT / "packaging/recovery/cleanup-stock.sh"
 CANDIDATE_PACKAGES = {"fips", "gl-sdk4-ui-fips", "gl-e5800-dashboard"}
 CANDIDATE_SERVICES = ("fips", "fips-gateway", "citydash", "homebutton", "fips-recovery")
+FIRST_INSTALL_GUARD_FILES = {
+    "etc/fips-recovery/apply-initial.sh",
+    "etc/fips-recovery/guard.sh",
+    "etc/fips-recovery/health.sh",
+    "etc/fips-recovery/probes.json",
+    "etc/fips-recovery/runtime-packages",
+    "etc/init.d/fips-recovery",
+}
 
 
 def validate_precleanup(before: dict, current: dict) -> bool:
@@ -153,7 +161,8 @@ def finalize(args: argparse.Namespace) -> str:
     needed = validate_precleanup(before, current)
     differences = compare_backups(args.before_backup, args.after_backup, args.identity,
                                   ignore_mtime=args.ignore_mtime)
-    if differences:
+    expected = {f"ADDED {name}" for name in FIRST_INSTALL_GUARD_FILES} if needed else set()
+    if set(differences) != expected or len(differences) != len(expected):
         raise ValueError("Configuration differs after rollback: " + ", ".join(differences))
     if not needed:
         return "STOCK_ALREADY_CLEAN"

@@ -14,8 +14,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from tools.finalize_stock_rollback import (archive_guard, finalize, validate_precleanup,
-                                          verify_guard_archive)
+from tools.finalize_stock_rollback import (FIRST_INSTALL_GUARD_FILES, archive_guard,
+                                          finalize, validate_precleanup, verify_guard_archive)
 from tools.router_inventory import SERVICES
 
 
@@ -93,7 +93,8 @@ class FinalizeStockTests(unittest.TestCase):
             with (patch("tools.finalize_stock_rollback.ssh_command", return_value=["ssh"]),
                   patch("tools.finalize_stock_rollback.capture_inventory",
                         side_effect=[current, before]),
-                  patch("tools.finalize_stock_rollback.compare_backups", return_value=[]),
+                  patch("tools.finalize_stock_rollback.compare_backups",
+                        side_effect=[[f"ADDED {name}" for name in FIRST_INSTALL_GUARD_FILES], []]),
                   patch("tools.finalize_stock_rollback.verify_guard_result"),
                   patch("tools.finalize_stock_rollback.archive_guard") as archived,
                   patch("tools.finalize_stock_rollback.capture_backup") as captured,
