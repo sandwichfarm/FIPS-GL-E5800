@@ -513,3 +513,34 @@ on GL-E5800 kernel 5.15 or of an external peer link. The FIPS `fd00::/8` route
 is broad enough to overlap other ULA networks when those are enabled; the
 observed stock Tailscale interface had IPv6 disabled, and the next Stage A
 trial must repeat VPN and route checks before treating coexistence as proven.
+
+A second manual Stage A transaction, `stagea_manual_20261001f`, installed the
+revised FIPS build and both UI packages on GL.iNet 4.10.0/OpenWrt 23.05.4.
+The router reported `state=running`, `tun_state=active`, one peer and one link
+to the public test node, plus a persistent public npub and `fd::/8` mesh
+address. `fips0` alone had IPv6 enabled; global/default IPv6 remained disabled.
+The LAN-client probe passed gateway, DNS, HTTPS, SSH, Mullvad exit and the
+owner's Tailscale peer while the trial was pending. The owner observed the FIPS
+touchscreen page with a peer and npub and used its return control to restore
+the stock display; the router then reported the stock display running and the
+dashboard stopped. The page showed a pending-deployment notice as designed.
+
+The owner also found the FIPS entry under Applications in the stock web admin,
+but clicking it produced a blank page. The router served the package's gzip
+bundle and menu file, while the toolkit's router-loader check reported that
+the bundle only assigned `module.exports`: this firmware's loader expects
+`eval()` to return the Vue component. The web build now wraps the component
+using the vendored toolkit's loader contract. The same check passes on the
+rebuilt production bundle, all six web unit tests pass, and the browser preview
+still passes its online/offline/error/control/viewport checks. The corrected
+web package has **not** yet been observed in the physical router browser.
+
+Because the installed web page failed, the controller explicitly ran manual
+rollback for transaction `f`; it returned `ROLLED_BACK`. The stock finalizer
+archived encrypted guard evidence, removed the guard, and returned
+`STOCK_STATE_RESTORED` after comparing configuration contents, ownership,
+modes, packages, services and vendor UI fingerprints to the fresh pretrial
+baseline. Timestamp-only vendor cellular drift was ignored as before. The
+final LAN-client probe again passed HTTPS, DNS, Mullvad, Tailscale and SSH;
+the stock screen runs, the recovery guard is absent, and global IPv6 remains
+disabled. A third Stage A trial is required to verify the corrected web page.

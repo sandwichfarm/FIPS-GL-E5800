@@ -7,8 +7,14 @@ rollback, comparison, and rescue commands. If SSH is lost during Stage A,
 there is no automatic recovery; physical intervention may be required.
 The first fully installed Stage A attempt was manually rolled back after FIPS
 failed to start its mesh interface and link on this IPv4-only router. Final
-inventory and encrypted configuration contents matched stock. A revised
-candidate is being built and must pass its own checks before another trial.
+inventory and encrypted configuration contents matched stock. Its revised
+FIPS candidate passed local checks before the second trial.
+The second Stage A attempt linked to the public peer and preserved LAN internet,
+DNS, Mullvad, Tailscale and SSH. The owner saw the FIPS touchscreen panel and
+used its return control, but the web admin FIPS page was blank. It was manually
+rolled back; final stock inventory and encrypted configuration contents matched
+the fresh baseline. The corrected web bundle passes the router-loader check
+locally and is ready for a later trial when the owner is available.
 
 The last successful read-only inventory (2026-10-01) matched GL.iNet 4.10.0,
 OpenWrt 23.05.4, `aarch64_cortex-a53`, all installed packages and service
