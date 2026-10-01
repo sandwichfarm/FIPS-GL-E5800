@@ -40,7 +40,7 @@ trap 'exit 1' 1 2 3 15
 umask 077
 mkdir -p /etc/fips-recovery
 chmod 0700 /etc/fips-recovery
-decode() { if command -v base64 >/dev/null 2>&1; then base64 -d; else openssl base64 -d; fi; }
+decode() { if command -v base64 >/dev/null 2>&1; then base64 -d; else openssl base64 -d -A; fi; }
 decode > /etc/fips-recovery/guard.sh.tmp <<'FIPS_GUARD_PAYLOAD'
 {{ lookup('file', playbook_dir + '/../packaging/recovery/guard.sh') | b64encode }}
 FIPS_GUARD_PAYLOAD

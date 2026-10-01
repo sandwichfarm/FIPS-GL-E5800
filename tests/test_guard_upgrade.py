@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import shlex
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -19,6 +20,21 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class GuardUpgradeTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("openssl"), "OpenSSL unavailable")
+    def test_openssl_only_bootstrap_decodes_long_guard_payload(self) -> None:
+        template = (ROOT / "ansible/templates/install-guard.sh.j2").read_text()
+        decoder = next(line for line in template.splitlines() if line.startswith("decode()"))
+        guard = (ROOT / "packaging/recovery/guard.sh").read_bytes()
+        with tempfile.TemporaryDirectory() as temporary:
+            (Path(temporary) / "openssl").symlink_to(shutil.which("openssl"))
+            result = subprocess.run(
+                ["/bin/sh", "-c", decoder + "\ndecode"],
+                input=base64.b64encode(guard) + b"\n",
+                env=os.environ | {"PATH": temporary}, capture_output=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, guard)
+
     def test_first_install_preflight_rejects_stale_bootstrap_paths(self) -> None:
         play = yaml.safe_load((ROOT / "ansible/deploy.yml").read_text())[0]
         task = next(task for task in play["tasks"]

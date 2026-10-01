@@ -469,3 +469,11 @@ controller script and runs through Ansible's streamed script transport; its
 existing atomic pre-arm cleanup remains inside the script. The offline kit
 includes that template. A read-only post-abort inventory again matched stock,
 with no recovery guard or candidate package left on the router.
+
+The next streamed bootstrap reached the router but failed its guard syntax
+check before arming. The router lacks a `base64` command; OpenSSL's default
+base64 decoder mishandled the long unwrapped payload. A temporary router probe
+verified `openssl base64 -d -A` produces the exact guard bytes and passes
+`sh -n`. The bootstrap now uses that decoder when `base64` is absent, with an
+OpenSSL-only regression test. Pre-arm cleanup again removed the guard, and the
+post-attempt inventory matched the stock baseline.
