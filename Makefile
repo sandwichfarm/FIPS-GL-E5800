@@ -85,7 +85,7 @@ lab-build:
 	$(RUST_RUN) 'PATH=/workspace/dev/tool-shims:$$PATH cargo build --locked --release --manifest-path apps/router-admin/Cargo.toml --bin fips-router-admin'
 
 lab-up:
-	docker compose -f dev/lab/compose.yml up -d --wait
+	docker compose -f dev/lab/compose.yml up -d --wait --pull never
 
 lab-test:
 	docker compose -f dev/lab/compose.yml exec -T node-a python3 /workspace/dev/lab/integration.py

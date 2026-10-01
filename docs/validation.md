@@ -434,3 +434,8 @@ including both recovery-kit smoke modes and upload of the 27,270,505-byte
 artifact. This verifies the hosted build and recovery fixture, not a deployment.
 A fresh read-only inventory on 2026-10-01 matched the 2026-09-30 stock
 baseline for firmware, installed packages, service states, and stock UI files.
+The documentation follow-up CI run `36869601594` exposed a race in the
+multi-node lifecycle smoke: Compose occasionally saw a SIGKILLed node as still
+running, then waited for that old container to exit with code 137. The smoke
+now explicitly recreates only that node before checking its persisted identity
+and mesh reconnection.

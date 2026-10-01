@@ -28,7 +28,9 @@ def main():
         raise SystemExit("Node B has no valid public identity")
     # A SIGKILL models sudden process loss and tests recovery from persisted state.
     run("kill", "-s", "KILL", "node-b")
-    run("up", "-d", "--wait", "node-b")
+    # Compose can still observe the killed container as Running for a moment;
+    # recreate it explicitly so --wait checks the replacement's health.
+    run("up", "-d", "--wait", "--force-recreate", "--no-deps", "--pull", "never", "node-b")
     after = identity()
     if after != before:
         raise SystemExit("FIPS identity changed after node crash")
