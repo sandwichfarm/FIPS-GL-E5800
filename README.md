@@ -69,7 +69,8 @@ See [local development](docs/local-development.md) for build, lab, preview, and
 package commands. [Validation evidence](docs/validation.md) and the
 [hardware trial plan](docs/hardware-trial.md) list the remaining acceptance
 gates. The [implementation tracker](docs/IMPLEMENTATION.md) is a historical
-planning snapshot.
+planning snapshot. [Upstream opportunities](docs/upstream-opportunities.md)
+remain separate from this router deployment.
 
 ## Local checks
 
