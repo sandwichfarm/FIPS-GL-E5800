@@ -34,6 +34,8 @@ jobs:
         run: make rust-test
       - name: Build and test native multi-node lab
         run: make lab-build lab-up lab-test
+      - name: Keep router IPv6 policy while starting the mesh TUN
+        run: make scoped-ipv6-test
       - name: Exercise route advertisement on isolated Linux LAN
         run: make route-lan-test
         env:

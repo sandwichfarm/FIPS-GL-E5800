@@ -152,8 +152,8 @@ impl Settings {
             "tun": {"enabled": true, "name": "fips0", "mtu": 1280},
             "dns": {"enabled": true, "bind_addr": "::1", "port": 5354},
             "transports": {
-                "udp": {"bind_addr": format!("[::]:{}", self.udp_port)},
-                "tcp": {"bind_addr": format!("[::]:{}", self.tcp_port)}
+                "udp": {"bind_addr": format!("0.0.0.0:{}", self.udp_port)},
+                "tcp": {"bind_addr": format!("0.0.0.0:{}", self.tcp_port)}
             },
             "gateway": {"enabled": self.gateway_enabled, "pool": "fd01::/112",
                         "lan_interface": "br-lan",
@@ -1129,6 +1129,14 @@ test ! -e "$dir/health-fail"
         assert_eq!(
             settings.daemon_config()["node"]["identity"]["persistent"],
             true
+        );
+        assert_eq!(
+            settings.daemon_config()["transports"]["udp"]["bind_addr"],
+            "0.0.0.0:2121"
+        );
+        assert_eq!(
+            settings.daemon_config()["transports"]["tcp"]["bind_addr"],
+            "0.0.0.0:8443"
         );
         assert!(
             settings.daemon_config()["transports"]

@@ -286,7 +286,10 @@ impl TunDevice {
     ///
     /// This requires CAP_NET_ADMIN capability (run with sudo or setcap).
     pub async fn create(config: &TunConfig, address: FipsAddress) -> Result<Self, TunError> {
-        // Check if IPv6 is enabled
+        // Linux can enable IPv6 on this TUN alone even when the router keeps
+        // the global/default IPv6 policy disabled. Other Unix platforms still
+        // require their existing system-wide check.
+        #[cfg(not(target_os = "linux"))]
         if platform::is_ipv6_disabled() {
             return Err(TunError::Ipv6Disabled);
         }
@@ -351,6 +354,9 @@ impl TunDevice {
                 .tun_name()
                 .map_err(|e| TunError::Configure(format!("failed to get device name: {}", e)))?
         };
+
+        #[cfg(target_os = "linux")]
+        platform::enable_interface_ipv6(&actual_name)?;
 
         // Configure address and bring up via platform-specific method
         platform::configure_interface(&actual_name, address.to_ipv6(), mtu).await?;
@@ -1376,11 +1382,20 @@ mod platform {
     use std::net::Ipv6Addr;
     use tracing::debug;
 
-    /// Check if IPv6 is disabled system-wide.
-    pub fn is_ipv6_disabled() -> bool {
-        std::fs::read_to_string("/proc/sys/net/ipv6/conf/all/disable_ipv6")
-            .map(|s| s.trim() == "1")
-            .unwrap_or(false)
+    /// Enable IPv6 only on the new TUN. Deleting it removes this interface's
+    /// sysctl; the router's all/default, WAN, LAN, and VPN settings stay put.
+    pub fn enable_interface_ipv6(name: &str) -> Result<(), TunError> {
+        if name.is_empty() || name.len() > 15 || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') {
+            return Err(TunError::Configure("invalid TUN interface name".to_string()));
+        }
+        let path = format!("/proc/sys/net/ipv6/conf/{name}/disable_ipv6");
+        let current = std::fs::read_to_string(&path)
+            .map_err(|e| TunError::Configure(format!("failed to read {path}: {e}")))?;
+        if current.trim() == "0" {
+            return Ok(());
+        }
+        std::fs::write(&path, "0\n")
+            .map_err(|e| TunError::Configure(format!("failed to enable IPv6 on {name}: {e}")))
     }
 
     /// Check if a network interface already exists.

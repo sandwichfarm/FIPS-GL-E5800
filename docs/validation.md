@@ -477,3 +477,39 @@ verified `openssl base64 -d -A` produces the exact guard bytes and passes
 `sh -n`. The bootstrap now uses that decoder when `base64` is absent, with an
 OpenSSL-only regression test. Pre-arm cleanup again removed the guard, and the
 post-attempt inventory matched the stock baseline.
+
+The first fully armed Stage A transaction, `stagea_manual_20261001e`, installed
+the three candidate packages and 34 checksum-pinned offline runtime packages.
+The guard reported `PENDING ... MANUAL` with both deadlines set to zero. The
+FIPS process started but health remained degraded with no peer link: upstream
+TUN creation rejected the router's `net.ipv6.conf.all.disable_ipv6=1`, and the
+router-generated IPv6 wildcard transport socket could not select a compatible
+path to the IPv4 test peer. This router also has `default.disable_ipv6=1` and
+no WAN/LAN IPv6; its pre-existing policy was not changed. The independent LAN
+probe passed HTTPS, DNS, router SSH, Mullvad exit, and the owner's Tailscale
+peer while packages were pending. No FIPS link or physical UI behavior was
+verified in this trial.
+
+The controller explicitly invoked manual rollback; the guard returned
+`ROLLED_BACK stagea_manual_20261001e`. The stock-cleanup preflight originally
+rejected the six expected standalone guard files in the after-backup; it now
+requires precisely those additions before cleanup. After archiving guard
+evidence and removing the guard, the final stock inventory matched the
+pretrial firmware, packages, services, and both vendor UI fingerprints.
+Encrypted backup comparison matched configuration file contents, ownership,
+and modes. One cellular slot-map file's mtime changed; earlier stock-only
+captures showed the same vendor-maintained mtime drift, so this comparison
+explicitly ignored timestamps. The final LAN probe again passed HTTPS, DNS,
+Mullvad, Tailscale, and SSH, and the original global IPv6 setting remained 1.
+Encrypted before, after, final, and guard-evidence archives are under ignored
+`private/predeploy/backups/`.
+
+The subsequent local fix enables IPv6 only on the newly created Linux FIPS TUN
+and makes the router package listen on IPv4 transport sockets. In a privileged,
+isolated Docker network namespace with global/default IPv6 disabled, the new
+binary started, reported health, and assigned a `fd::/8` address to `fips0`;
+global/default remained disabled. This is not yet proof of the same behavior
+on GL-E5800 kernel 5.15 or of an external peer link. The FIPS `fd00::/8` route
+is broad enough to overlap other ULA networks when those are enabled; the
+observed stock Tailscale interface had IPv6 disabled, and the next Stage A
+trial must repeat VPN and route checks before treating coexistence as proven.

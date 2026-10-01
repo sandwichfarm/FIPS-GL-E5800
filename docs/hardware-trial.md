@@ -5,6 +5,10 @@ Stage B, firmware flashing, reset, and deliberate loss of router connectivity
 are not approved. Use [the recovery runbook](recovery.md) for the exact backup,
 rollback, comparison, and rescue commands. If SSH is lost during Stage A,
 there is no automatic recovery; physical intervention may be required.
+The first fully installed Stage A attempt was manually rolled back after FIPS
+failed to start its mesh interface and link on this IPv4-only router. Final
+inventory and encrypted configuration contents matched stock. A revised
+candidate is being built and must pass its own checks before another trial.
 
 The last successful read-only inventory (2026-10-01) matched GL.iNet 4.10.0,
 OpenWrt 23.05.4, `aarch64_cortex-a53`, all installed packages and service
