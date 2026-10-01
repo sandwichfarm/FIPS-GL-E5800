@@ -81,7 +81,7 @@ supported fallback. Report the observed state before any new install.
 
 The ignored `private/deploy-profiles/stage-b-20261001.yml` pins the three
 Stage-A-verified IPKs, public test peer, `gateway_enabled: false`, and a
-manual-only package guard. The private `stageb_persistent_ready_20261001v3`
+manual-only package guard. The private `stageb_persistent_ready_20261001v4`
 offline kit includes the stock backup and exact recovery tools. Recheck both
 against the current working tree and router immediately before use.
 
@@ -109,6 +109,12 @@ against the current working tree and router immediately before use.
    after returning to FIPS. These configuration switches each use a separate
    180-second router-local rollback. The initial package guard remains manual
    only. Leave the router in the owner's chosen operating mode.
+
+The guarded operating-mode switch refuses a pending package transaction, so
+its complete hardware test must follow package confirmation. The physical
+return and FIPS display restoration can be checked before confirmation. If a
+later operating-mode change fails, its separate router-local guard restores
+the previous configuration; the manual package guard no longer applies.
 
 The owner accepted that stock operating mode keeps FIPS packages, identity and
 peer settings installed for easy switching. An exact uninstall after package
