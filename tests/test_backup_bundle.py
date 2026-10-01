@@ -169,6 +169,11 @@ class BackupBundleTests(unittest.TestCase):
             self.assertEqual(destination.stat().st_mode & 0o777, 0o600)
             self.assertEqual(destination.parent.stat().st_mode & 0o777, 0o700)
             self.assertEqual(verify_encrypted(destination, identity, True), set(files))
+            crlf_destination = root / "private/predeploy/tx-crlf.age"
+            crlf_stream = b"FIPS_PRESENT=1\r\n" + base64.b64encode(archive(files)) + b"\r\n"
+            self.assertEqual(capture_received(crlf_stream, recipient, identity,
+                                              crlf_destination), crlf_destination)
+            self.assertEqual(verify_encrypted(crlf_destination, identity, True), set(files))
             with self.assertRaisesRegex(ValueError, "Choose a new"):
                 capture_received(streamed, recipient, identity, destination)
             with self.assertRaisesRegex(ValueError, "marker differs"):

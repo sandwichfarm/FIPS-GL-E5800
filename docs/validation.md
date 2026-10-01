@@ -452,3 +452,10 @@ matches the stock baseline, and the LAN client passed gateway, DNS, HTTPS,
 Mullvad exit, router SSH and router-origin Tailscale peer probes. These are
 predeployment observations; post-install and physical touchscreen checks remain
 hardware acceptance criteria.
+
+The first Stage A deploy attempt stopped before router writes at the mandatory
+encrypted-backup step: Ansible's SSH stream used CRLF after the identity marker,
+which the controller parser rejected. A read-only reproduction captured the
+same stream shape without printing backup contents. The parser now accepts that
+line ending; a focused encrypted-backup test and the exact Ansible stream
+reproduction pass. The router guard and candidate packages remained absent.

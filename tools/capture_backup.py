@@ -118,6 +118,8 @@ def capture_received(encoded: bytes, recipient: str, identity: Path, output: Pat
     if len(encoded) > MAX_ENCODED_ARCHIVE:
         raise ValueError("Router backup stream is too large")
     marker, separator, payload = encoded.strip().partition(b"\n")
+    # Ansible's SSH pseudo-terminal can translate the router's LF to CRLF.
+    marker = marker.rstrip(b"\r")
     if not separator or marker not in (b"FIPS_PRESENT=0", b"FIPS_PRESENT=1"):
         raise ValueError("Router backup stream has no valid identity marker")
     try:
