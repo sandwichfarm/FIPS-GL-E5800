@@ -122,8 +122,13 @@ class GuardUpgradeTests(unittest.TestCase):
                         names.index("Install and start boot-persistent recovery guard"))
         self.assertEqual(block[names.index("Arm the existing guard before replacing its files")]["when"],
                          "existing_recovery_guard")
+        self.assertLess(names.index("Render guard bootstrap as a streamed script"),
+                        names.index("Install and start boot-persistent recovery guard"))
+        install = block[names.index("Install and start boot-persistent recovery guard")]
+        self.assertEqual(install["ansible.builtin.script"]["executable"], "/bin/sh")
+        self.assertIn("guard_stage.path", install["ansible.builtin.script"]["cmd"])
         self.assertIn("/bin/sh /etc/fips-recovery/guard.sh arm",
-                      block[names.index("Install and start boot-persistent recovery guard")]["ansible.builtin.raw"])
+                      (ROOT / "ansible/templates/install-guard.sh.j2").read_text())
         self.assertNotIn("Stage exact prior packages for a first installation", names)
 
     def test_both_guard_install_scripts_render_as_shell(self) -> None:
@@ -133,8 +138,7 @@ class GuardUpgradeTests(unittest.TestCase):
                         if task["name"] == "Classify a prior recovery guard before router writes")
         block = next(task["block"] for task in tasks
                      if task["name"] == "Install with a router-local rollback guard")
-        install = next(task for task in block
-                       if task["name"] == "Install and start boot-persistent recovery guard")
+        install = (ROOT / "ansible/templates/install-guard.sh.j2").read_text()
         jinja = Environment()
         jinja.filters["from_json"] = json.loads
         jinja.filters["to_json"] = json.dumps
@@ -156,7 +160,7 @@ class GuardUpgradeTests(unittest.TestCase):
         }
         for existing in (False, True):
             rendered_classify = jinja.from_string(classify["ansible.builtin.raw"]).render(variables)
-            rendered_install = jinja.from_string(install["ansible.builtin.raw"]).render(
+            rendered_install = jinja.from_string(install).render(
                 variables | {"existing_recovery_guard": existing})
             for name, rendered in (("classify", rendered_classify), ("install", rendered_install)):
                 result = subprocess.run(["sh", "-n"], input=rendered, text=True,
@@ -168,7 +172,7 @@ class GuardUpgradeTests(unittest.TestCase):
                              not existing)
             self.assertEqual("bootstrap_cleanup" in rendered_install, not existing)
 
-        manual_install = jinja.from_string(install["ansible.builtin.raw"]).render(
+        manual_install = jinja.from_string(install).render(
             variables | {"existing_recovery_guard": False,
                          "deployment_recovery_mode": "manual"})
         self.assertIn("tx1 manual", manual_install)
@@ -197,6 +201,8 @@ class GuardUpgradeTests(unittest.TestCase):
         bootstrap = rescue[1]["ansible.builtin.script"]
         self.assertIn("packaging/recovery/cleanup-bootstrap.sh", bootstrap["cmd"])
         self.assertEqual(bootstrap["executable"], "/bin/sh")
+        self.assertEqual(transaction["always"][0]["name"],
+                         "Remove private controller guard staging")
 
     def test_manual_mode_is_first_install_only_and_has_no_auto_rollback(self) -> None:
         play = yaml.safe_load((ROOT / "ansible/deploy.yml").read_text())[0]
@@ -207,9 +213,8 @@ class GuardUpgradeTests(unittest.TestCase):
         self.assertIn("not existing_recovery_guard", manual_gate["ansible.builtin.assert"]["that"])
         transaction = next(task for task in tasks
                            if task["name"] == "Install with a router-local rollback guard")
-        install = next(task for task in transaction["block"]
-                       if task["name"] == "Install and start boot-persistent recovery guard")
-        self.assertIn("'manual' if deployment_recovery_mode", install["ansible.builtin.raw"])
+        self.assertIn("'manual' if deployment_recovery_mode",
+                      (ROOT / "ansible/templates/install-guard.sh.j2").read_text())
         self.assertEqual(transaction["rescue"][0]["when"],
                          "deployment_recovery_mode != 'manual'")
 
@@ -217,8 +222,7 @@ class GuardUpgradeTests(unittest.TestCase):
         play = yaml.safe_load((ROOT / "ansible/deploy.yml").read_text())[0]
         transaction = next(task for task in play["tasks"]
                            if task["name"] == "Install with a router-local rollback guard")
-        template = next(task["ansible.builtin.raw"] for task in transaction["block"]
-                        if task["name"] == "Install and start boot-persistent recovery guard")
+        template = (ROOT / "ansible/templates/install-guard.sh.j2").read_text()
         jinja = Environment()
         jinja.filters["from_json"] = json.loads
         jinja.filters["to_json"] = json.dumps

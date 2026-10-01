@@ -22,7 +22,9 @@ class ConfirmationBindingTests(unittest.TestCase):
         transaction = next(item for item in play["tasks"] if item["name"].startswith("Install with a router-local"))
         install_guard = next(item for item in transaction["block"]
                              if item["name"].startswith("Install and start boot-persistent"))
-        line = next(line.strip() for line in install_guard["ansible.builtin.raw"].splitlines()
+        self.assertIn("ansible.builtin.script", install_guard)
+        guard_template = (ROOT / "ansible/templates/install-guard.sh.j2").read_text()
+        line = next(line.strip() for line in guard_template.splitlines()
                     if "'components':" in line)
         jinja = Environment()
         jinja.filters["to_json"] = json.dumps

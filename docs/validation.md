@@ -459,3 +459,13 @@ which the controller parser rejected. A read-only reproduction captured the
 same stream shape without printing backup contents. The parser now accepts that
 line ending; a focused encrypted-backup test and the exact Ansible stream
 reproduction pass. The router guard and candidate packages remained absent.
+
+The second Stage A attempt passed encrypted backup, then lost SSH during the
+first-install guard bootstrap. Router Dropbear logged an integrity error with
+a packet size close to the approximately 46 KB inline raw command. A harmless
+46 KB Ansible `raw` probe reproduced the disconnect, while an equally large
+streamed `script` probe succeeded. The bootstrap now renders into a private
+controller script and runs through Ansible's streamed script transport; its
+existing atomic pre-arm cleanup remains inside the script. The offline kit
+includes that template. A read-only post-abort inventory again matched stock,
+with no recovery guard or candidate package left on the router.

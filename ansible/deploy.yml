@@ -310,109 +310,24 @@
           changed_when: "'ARMED ' in prior_recovery_arm.stdout"
           when: existing_recovery_guard
 
+        - name: Allocate private controller guard staging
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: e5800-guard-
+          delegate_to: localhost
+          register: guard_stage
+
+        - name: Render guard bootstrap as a streamed script
+          ansible.builtin.template:
+            src: "{{ playbook_dir }}/templates/install-guard.sh.j2"
+            dest: "{{ guard_stage.path }}/install-guard.sh"
+            mode: '0700'
+          delegate_to: localhost
+
         - name: Install and start boot-persistent recovery guard
-          ansible.builtin.raw: |
-            set -eu
-            {% if existing_recovery_guard %}
-            test -f /etc/fips-recovery/pending
-            read -r pending_id _ < /etc/fips-recovery/pending
-            test "$pending_id" = {{ recovery_transaction | quote }}
-            {% else %}
-            test ! -e /etc/fips-recovery/pending
-            bootstrap_cleanup() {
-              trap - 0 1 2 3 15
-              attempts=0
-              while [ -L /tmp/fips-recovery/guard.lock ]; do
-                holder=$(readlink /tmp/fips-recovery/guard.lock) || return 1
-                case "$holder" in ''|*[!0-9]*) return 1;; esac
-                kill -0 "$holder" 2>/dev/null || break
-                [ "$attempts" -lt 10 ] || return 1
-                sleep 1
-                attempts=$((attempts + 1))
-              done
-              if [ -e /etc/fips-recovery/pending ] || [ -L /etc/fips-recovery/pending ]; then
-                return 0
-              fi
-              installed=$(opkg list-installed) || return 1
-              for package in fips gl-sdk4-ui-fips gl-e5800-dashboard; do
-                if printf '%s\n' "$installed" | grep -q "^$package - "; then return 1; fi
-              done
-              if [ -x /etc/init.d/fips-recovery ]; then
-                /etc/init.d/fips-recovery disable || true
-                /etc/init.d/fips-recovery stop || true
-              fi
-              for link in /etc/rc.d/*fips-recovery; do
-                if [ -e "$link" ] || [ -L "$link" ]; then rm -f "$link"; fi
-              done
-              rm -f /etc/init.d/fips-recovery /etc/init.d/fips-recovery.tmp
-              rm -rf /etc/fips-recovery /tmp/fips-recovery
-              sync
-            }
-            trap 'bootstrap_cleanup' 0
-            trap 'exit 1' 1 2 3 15
-            {% endif %}
-            umask 077
-            mkdir -p /etc/fips-recovery
-            chmod 0700 /etc/fips-recovery
-            decode() { if command -v base64 >/dev/null 2>&1; then base64 -d; else openssl base64 -d; fi; }
-            decode > /etc/fips-recovery/guard.sh.tmp <<'FIPS_GUARD_PAYLOAD'
-            {{ lookup('file', playbook_dir + '/../packaging/recovery/guard.sh') | b64encode }}
-            FIPS_GUARD_PAYLOAD
-            /bin/sh -n /etc/fips-recovery/guard.sh.tmp
-            mv /etc/fips-recovery/guard.sh.tmp /etc/fips-recovery/guard.sh
-            chmod 0700 /etc/fips-recovery/guard.sh
-            decode > /etc/fips-recovery/health.sh.tmp <<'FIPS_HEALTH_PAYLOAD'
-            {{ lookup('file', playbook_dir + '/../packaging/recovery/health.sh') | b64encode }}
-            FIPS_HEALTH_PAYLOAD
-            /bin/sh -n /etc/fips-recovery/health.sh.tmp
-            mv /etc/fips-recovery/health.sh.tmp /etc/fips-recovery/health.sh
-            chmod 0700 /etc/fips-recovery/health.sh
-            decode > /etc/fips-recovery/probes.json.tmp <<'FIPS_PROBES'
-            {{ {'ip': recovery_probe_ip, 'name': recovery_probe_name, 'minimum_links': fips_required_link_count | default(1) | int, 'ipv6': recovery_probe_ipv6 | default(none), 'components': restore_components | unique | sort | join(',')} | to_json | b64encode }}
-            FIPS_PROBES
-            mv /etc/fips-recovery/probes.json.tmp /etc/fips-recovery/probes.json
-            chmod 0600 /etc/fips-recovery/probes.json
-            decode > /etc/fips-recovery/apply-initial.sh.tmp <<'FIPS_INITIAL_SCRIPT'
-            {{ lookup('file', playbook_dir + '/../packaging/recovery/apply-initial.sh') | b64encode }}
-            FIPS_INITIAL_SCRIPT
-            /bin/sh -n /etc/fips-recovery/apply-initial.sh.tmp
-            mv /etc/fips-recovery/apply-initial.sh.tmp /etc/fips-recovery/apply-initial.sh
-            chmod 0700 /etc/fips-recovery/apply-initial.sh
-            {% if 'device_ui' in restore_components %}
-            decode > /etc/fips-recovery/runtime-packages.tmp <<'FIPS_RUNTIME_PACKAGES'
-            {{ (((lookup('file', playbook_dir + '/../upstream/vendor/runtime.json') | from_json).remove_order | join('\n')) ~ '\n') | b64encode }}
-            FIPS_RUNTIME_PACKAGES
-            {% else %}
-            : > /etc/fips-recovery/runtime-packages.tmp
-            {% endif %}
-            mv /etc/fips-recovery/runtime-packages.tmp /etc/fips-recovery/runtime-packages
-            chmod 0600 /etc/fips-recovery/runtime-packages
-            decode > /etc/init.d/fips-recovery.tmp <<'FIPS_INIT_PAYLOAD'
-            {{ lookup('file', playbook_dir + '/../packaging/recovery/fips-recovery.init') | b64encode }}
-            FIPS_INIT_PAYLOAD
-            /bin/sh -n /etc/init.d/fips-recovery.tmp
-            mv /etc/init.d/fips-recovery.tmp /etc/init.d/fips-recovery
-            chmod 0755 /etc/init.d/fips-recovery
-            {% if not existing_recovery_guard %}
-            /etc/init.d/fips-recovery enable
-            /etc/init.d/fips-recovery restart
-            {% else %}
-            # Keep the old watchdog process alive through the upgrade deadline.
-            /etc/init.d/fips-recovery enabled
-            {% endif %}
-            /etc/init.d/fips-recovery status
-            {% if not existing_recovery_guard %}
-            mkdir -p /etc/fips-recovery/{{ recovery_transaction }}/previous
-            chmod 0700 /etc/fips-recovery/{{ recovery_transaction }} \
-              /etc/fips-recovery/{{ recovery_transaction }}/previous
-            /bin/sh /etc/fips-recovery/guard.sh arm \
-            {{ recovery_transaction | quote }} {{ ('manual' if deployment_recovery_mode | default('timed') == 'manual' else (recovery_seconds | string)) | quote }}
-            arm_status=$(/bin/sh /etc/fips-recovery/guard.sh status)
-            set -- $arm_status
-            test "$1" = PENDING
-            test "$2" = {{ recovery_transaction | quote }}
-            trap - 0 1 2 3 15
-            {% endif %}
+          ansible.builtin.script:
+            cmd: "{{ guard_stage.path }}/install-guard.sh"
+            executable: /bin/sh
           register: recovery_guard_install
           changed_when: true
 
@@ -567,3 +482,11 @@
               {% else %}
               Deployment failed. Check /etc/fips-recovery/{{ recovery_transaction }}/result on the router; its watchdog rolls back after the deadline or reboot if SSH was lost.
               {% endif %}
+
+      always:
+        - name: Remove private controller guard staging
+          ansible.builtin.file:
+            path: "{{ guard_stage.path }}"
+            state: absent
+          delegate_to: localhost
+          when: guard_stage is defined and guard_stage.path is defined

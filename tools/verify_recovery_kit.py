@@ -37,6 +37,7 @@ REQUIRED_KIT_FILES = {
     "ansible/inspect.yml", "ansible/inspect-dependencies.yml", "ansible/restore.yml",
     "ansible/inventory/router.yml",
     "ansible/stage_previous.yml", "ansible/vars/defaults.yml",
+    "ansible/templates/install-guard.sh.j2",
     "ansible/roles/device_ui/tasks/main.yml", "ansible/roles/fips/tasks/main.yml",
     "ansible/roles/offline_runtime/tasks/main.yml",
     "ansible/roles/package_restore/tasks/main.yml",

@@ -27,6 +27,7 @@ COPIES = (
     "ansible/inspect-dependencies.yml",
     "ansible/restore.yml",
     "ansible/stage_previous.yml",
+    "ansible/templates/install-guard.sh.j2",
     "ansible/inventory/router.yml",
     "ansible/vars/defaults.yml",
     "upstream/vendor/runtime.json",

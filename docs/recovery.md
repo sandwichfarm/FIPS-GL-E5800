@@ -46,8 +46,10 @@ matching firmware fingerprint are not approval or hardware verification.
    persistent router write. It refuses an existing backup filename, so each
    transaction must use a new ID. A successful archive check is still not a
    restore rehearsal.
-   On a first installation, guard upload, service start and deadline arming run
-   in one SSH command. Its exit/HUP/TERM trap removes the new guard if the
+   On a first installation, Ansible streams the guard bootstrap as a script
+   because this router's Dropbear rejects the equivalent large inline SSH
+   command. Guard upload, service start and transaction arming then run in one
+   SSH command. Its exit/HUP/TERM trap removes the new guard if the
    command fails before arming; after arming, the router-local watchdog owns
    rollback in timed mode. For the approved manual-only Stage A, the pending
    marker remains until an operator calls `guard.sh rollback` or confirms it;
