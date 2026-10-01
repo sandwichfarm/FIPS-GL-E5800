@@ -1,5 +1,11 @@
 # Deployment and recovery for GL-E5800
 
+Stage A manual package trials on GL.iNet 4.10.0/OpenWrt 23.05.4 installed all
+three candidates and returned the router to its fresh stock baseline. Stage B
+persistent installation and guarded operating-mode switching still require the
+owner's separate approval. See [hardware trial](hardware-trial.md) and
+[validation evidence](validation.md) for the tested scope and exact hashes.
+
 This workspace builds three separate packages: the FIPS daemon/management binary,
 a GL.iNet web extension, and the community replacement touchscreen dashboard.
 The stock web and touchscreen applications are proprietary captures, not source
@@ -510,16 +516,20 @@ available to pull requests. It rebuilds packages and checks the private profile'
 candidate hashes before invoking the same Ansible transaction. Its success means
 the transaction is pending, not confirmed; run the separate confirmation playbook
 from the local controller after checking both interfaces. This repository
-has an origin remote but no hosted runner configured, so CI/CD is authored but
-not yet observed running on GitHub.
+has no trusted hardware runner configured; use the local Ansible controller for
+approved deployments. Hosted build/test CI passed on
+[commit `d49dcba`](https://github.com/sandwichfarm/FIPS-GL-E5800/actions/runs/36908148470)
+and uploaded all three candidate IPKs. The manual GitHub hardware workflow has
+not been exercised.
 
 ## Recovery ladder
 
 | Recovery path | Current evidence |
 | --- | --- |
-| Router-local deadline, reboot and interrupted-install rollback | Passed isolated fake-opkg/filesystem tests; not run on the GL-E5800. |
+| Manual package rollback to exact stock state | Stage A transaction `stagea_manual_20261001g` ran on the GL-E5800; encrypted configuration contents and package/service/UI inventory matched its fresh baseline after rollback. |
+| Router-local deadline, reboot and interrupted-install rollback | Passed isolated fake-opkg/filesystem tests; timed rollback and power-loss recovery have not been run on the GL-E5800. |
 | Post-firmware identity restore followed by controller loss | Passed isolated filesystem test; not run on OpenWrt hardware. |
-| Offline kit integrity and tamper detection | Passed synthetic two-UI kit smoke and local age encrypt/decrypt tests; a real stock-router backup was decrypted and validated, but not restored. |
+| Offline kit integrity and tamper detection | Passed synthetic two-UI kit smoke and local age encrypt/decrypt tests; a real stock-router backup was decrypted and validated, but not restored after firmware replacement. |
 | Four-second soft reset and ten-second factory reset | Vendor documentation only; neither reset was performed. |
 | No-SSH debrick/support procedure | Vendor documentation only; no debrick action was performed. |
 
@@ -531,7 +541,7 @@ not yet observed running on GitHub.
   saved identity/config and predeployment screen state. For a first installation,
   this is the stock screen.
 - If SSH is lost during a **timed** transaction, wait for the guard's deadline
-  and reconnect; reboot also triggers rollback. During **manual-only Stage A**,
+  and reconnect; reboot also triggers rollback. During a **manual-only package trial**,
   neither happens: recover management access using the model-specific paths
   below, then run the explicit rollback command. Do not overwrite the stock
   `/www` tree or `gl_screen` binary with an old capture.
@@ -589,4 +599,6 @@ separate authorization. Set `predeploy_backup.directory` outside the sealed
 kit so a new deployment backup does not invalidate its manifest.
 After a real guarded deployment and independent interface review, run
 `ANSIBLE_CONFIG=ansible/ansible.cfg ansible-playbook ansible/confirm.yml --ask-pass -e @private/deploy.yml -e recovery_transaction=<same-id> -e interface_health_verified=true`
-from the kit directory before the rollback deadline.
+from the kit directory before the rollback deadline when using a timed
+transaction. A manual-only package transaction has no deadline; confirm only
+after every independent check passes.

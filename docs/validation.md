@@ -585,7 +585,7 @@ a manual package transaction can be confirmed after elapsed time and a reboot
 without removing the installed packages. The full local suite now passes 157
 Python tests plus shell and Ansible syntax checks. An ignored Stage B profile
 pins the three hardware-trial IPKs with gateway mode off and manual-only package
-recovery. Its offline kit `stageb_persistent_ready_20261001v4` passed integrity,
+recovery. Its offline kit `stageb_persistent_ready_20261001v5` passed integrity,
 candidate, runtime and encrypted-backup verification; the live stock router
 passed the profile's read-only Ansible check mode with zero changes. The owner
 accepted stock operating mode with FIPS packages left installed. No Stage B
@@ -613,5 +613,5 @@ Stage-A-tested hashes byte for byte:
 `082f5febda4f07878116655db6494f8ef69c1add417ccefbd4c2297ff5e1b146`,
 `2d98c7577bde86204d3a8d23b341d2c47a05b7b2d3d68fe663724813ff12c1d6`,
 and `d2ba1d04d3c5cdc2f1421a40722aeaafa63bbff1c0b7d5819dd236a7adfd35e3`.
-The `stageb_persistent_ready_20261001v4` offline kit includes the current
+The `stageb_persistent_ready_20261001v5` offline kit includes the current
 schema-3 provenance and verifies against the encrypted stock backup.

@@ -1,5 +1,10 @@
 # End-to-end implementation tracker
 
+This is the historical implementation tracker from before the hardware trials.
+Its unchecked items and the evidence below are a planning snapshot, not the
+current project status. Use [validation evidence](validation.md) and the
+[hardware trial plan](hardware-trial.md) for current results and remaining gates.
+
 Objective: complete the runtime, both interfaces, local development, CI/CD, and
 deployment/disaster recovery described in the user's attached goal. Hardware
 inspection is authorized; hardware deployment requires a concrete, separately

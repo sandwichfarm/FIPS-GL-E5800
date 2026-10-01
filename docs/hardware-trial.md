@@ -81,7 +81,7 @@ supported fallback. Report the observed state before any new install.
 
 The ignored `private/deploy-profiles/stage-b-20261001.yml` pins the three
 Stage-A-verified IPKs, public test peer, `gateway_enabled: false`, and a
-manual-only package guard. The private `stageb_persistent_ready_20261001v4`
+manual-only package guard. The private `stageb_persistent_ready_20261001v5`
 offline kit includes the stock backup and exact recovery tools. Recheck both
 against the current working tree and router immediately before use.
 

@@ -199,9 +199,14 @@ guardian before any package change. It leaves successful installs pending until
 For a first FIPS install, reviewed `initial_fips_settings` activate inside that
 same guard; the health probe requires an enabled node with a live link.
 `ansible/restore.yml` is now check-only.
-The new deployment workflow has passed local syntax and fake-opkg fault tests,
-but has not run on the router. An explicit approved hardware pass remains
-required. The hosted CI and manual LAN-runner workflows have also not yet run.
+The deployment workflow passed local syntax and fake-opkg fault tests, then
+installed all three candidates in Stage A GL-E5800 trials. The final trial
+linked a peer, rendered both interfaces, preserved ordinary internet and VPNs,
+and manually rolled back to the fresh stock baseline. Hosted ARM64 CI passed
+and uploaded matching package artifacts on
+[commit `d49dcba`](https://github.com/sandwichfarm/FIPS-GL-E5800/actions/runs/36908148470).
+The manual LAN-runner workflow has not run; persistent Stage B installation
+requires the owner's separate approval.
 
 For a read-only encrypted configuration capture and offline kit, follow
 `docs/recovery.md`. Real kits require the age private identity to verify that

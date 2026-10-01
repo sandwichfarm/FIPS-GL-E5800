@@ -64,10 +64,12 @@ Read [recovery instructions](docs/recovery.md) before using the playbooks and
 The recovery runbook includes a guarded FIPS/stock operating-mode switch that
 keeps ordinary WAN service and disables the optional LAN gateway. It requires
 independent internet, DNS, VPN, administration and screen checks before
-confirmation; the first on-device use still needs explicit owner approval.
+confirmation; the persistent Stage B install still needs explicit owner approval.
 See [local development](docs/local-development.md) for build, lab, preview, and
-package commands. [Implementation tracker](docs/IMPLEMENTATION.md) lists the
-remaining acceptance gates.
+package commands. [Validation evidence](docs/validation.md) and the
+[hardware trial plan](docs/hardware-trial.md) list the remaining acceptance
+gates. The [implementation tracker](docs/IMPLEMENTATION.md) is a historical
+planning snapshot.
 
 ## Local checks
 
