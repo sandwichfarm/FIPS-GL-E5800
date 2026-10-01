@@ -1,6 +1,6 @@
 # Proposed GL-E5800 hardware trial
 
-**Status:** the owner approved Stage A only, with manual rollback and no timer.
+**Status:** Stage A completed on 2026-10-01 with manual rollback and no timer.
 Stage B, firmware flashing, reset, and deliberate loss of router connectivity
 are not approved. Use [the recovery runbook](recovery.md) for the exact backup,
 rollback, comparison, and rescue commands. If SSH is lost during Stage A,
@@ -13,8 +13,13 @@ The second Stage A attempt linked to the public peer and preserved LAN internet,
 DNS, Mullvad, Tailscale and SSH. The owner saw the FIPS touchscreen panel and
 used its return control, but the web admin FIPS page was blank. It was manually
 rolled back; final stock inventory and encrypted configuration contents matched
-the fresh baseline. The corrected web bundle passes the router-loader check
-locally and is ready for a later trial when the owner is available.
+the fresh baseline. A third trial installed the corrected web bundle; the
+owner confirmed live status, identity, peers, transport settings and diagnostics
+in the browser. Automated health found one FIPS link, and LAN internet, DNS,
+Mullvad, Tailscale and SSH passed. This trial was also manually rolled back;
+final stock inventory and encrypted configuration contents matched its fresh
+baseline. See [validation evidence](validation.md) for transaction IDs, tested
+scope and remaining hardware gates.
 
 The last successful read-only inventory (2026-10-01) matched GL.iNet 4.10.0,
 OpenWrt 23.05.4, `aarch64_cortex-a53`, all installed packages and service
@@ -74,14 +79,43 @@ supported fallback. Report the observed state before any new install.
 
 ## Stage B: keep FIPS installed, only after Stage A review and fresh approval
 
-Take a new encrypted backup and inventory, verify the same firmware and IPKs,
-then run a new guarded deployment with `gateway_enabled: false`. Confirm only
-while the 600-second deadline remains and the same LAN client still has
-ordinary HTTPS, DNS, VPN access, and router administration; the router has a
-live FIPS peer link; and the web UI and physical display work. After
-confirmation, exercise the guarded FIPS/stock operating-mode switch in both
-directions, checking the same ordinary network paths in each mode. Retain the
-verified backup, prior artifacts, and offline kit for later upgrades.
+The ignored `private/deploy-profiles/stage-b-20261001.yml` pins the three
+Stage-A-verified IPKs, public test peer, `gateway_enabled: false`, and a
+manual-only package guard. The private `stageb_persistent_ready_20261001v2`
+offline kit includes the stock backup and exact recovery tools. Recheck both
+against the current working tree and router immediately before use.
+
+1. Capture a fresh stock inventory and encrypted backup, verify them, run the
+   Ansible check mode, and record the same LAN-client HTTPS, DNS, SSH, Mullvad
+   and Tailscale probes. Refuse changed firmware, vendor UI fingerprints,
+   installed packages, pending UCI edits, or an existing recovery guard.
+2. With the owner present, deploy all three IPKs under a unique manual package
+   transaction. Leave it pending. Check router and LAN-client networking, FIPS
+   peer link, authenticated web status/settings/diagnostics, touchscreen FIPS
+   page and physical return control. After testing the return control, restore
+   the FIPS display with `/root/dashboard/toggle.sh on` before confirmation.
+   If any check fails, explicitly run
+   `guard.sh rollback`, archive the guard evidence, remove it, and compare the
+   final encrypted backup and inventory with the fresh stock baseline.
+3. Only if every check passes, run `ansible/confirm.yml` with the exact
+   transaction and `interface_health_verified=true`. Capture an encrypted
+   FIPS identity/configuration backup and confirmed package inventory. Keep
+   these and the matching IPKs in the private offline kit before any future
+   upgrade. The package confirmation has no timer and intentionally leaves
+   FIPS installed.
+4. Use `tools/switch_mode.py` to prepare and confirm stock mode, then prepare
+   and confirm FIPS mode. Repeat ordinary network/VPN/admin checks in both;
+   require the same public identity, peer link, web view, and screen ownership
+   after returning to FIPS. These configuration switches each use a separate
+   180-second router-local rollback. The initial package guard remains manual
+   only. Leave the router in the owner's chosen operating mode.
+
+The owner accepted that stock operating mode keeps FIPS packages, identity and
+peer settings installed for easy switching. An exact uninstall after package
+confirmation is outside Stage B. If SSH is lost during the manual package
+transaction, there is no timed recovery; use the model-specific physical
+recovery ladder. No fault injection, firmware flash or reset is part of this
+in-use-router plan.
 
 Hardware evidence is required for these claims. Local tests and a matching
 firmware fingerprint alone do not prove that the GL-E5800 preserves client

@@ -544,3 +544,49 @@ baseline. Timestamp-only vendor cellular drift was ignored as before. The
 final LAN-client probe again passed HTTPS, DNS, Mullvad, Tailscale and SSH;
 the stock screen runs, the recovery guard is absent, and global IPv6 remains
 disabled. A third Stage A trial is required to verify the corrected web page.
+
+The owner-approved third Stage A transaction, `stagea_manual_20261001g`, used
+the corrected web IPK (`2d98c7577bde86204d3a8d23b341d2c47a05b7b2d3d68fe663724813ff12c1d6`).
+The fresh pretrial inventory matched the previous stock final state; an
+encrypted backup, verified offline kit and Ansible check mode passed before
+installation. Ansible installed all three candidates under the manual-only
+guard and passed its full health check. The live backend reported `running`,
+active TUN, one peer and one link; global IPv6 stayed disabled while `fips0`
+alone had IPv6 enabled. The router-served web bundle passed the toolkit's
+actual `eval()` loader test. The owner refreshed the GL.iNet admin page and
+confirmed that FIPS status, identity, peers, transport settings and diagnostics
+rendered. The owner's diagnostics image showed valid configuration, reachable
+daemon, one persistent peer, two transports, active TUN and running state.
+Unauthenticated CGI POST returned HTTP 401. A LAN client again passed ordinary
+HTTPS, DNS, router SSH, Mullvad exit and the Tailscale test peer while pending.
+
+As planned for Stage A, the controller manually rolled back transaction `g`;
+the guard returned `ROLLED_BACK stagea_manual_20261001g`. The finalizer archived
+guard evidence, removed the guard, and returned `STOCK_STATE_RESTORED` after
+encrypted configuration and inventory comparison with the fresh pretrial
+baseline (file contents, ownership and modes exact; vendor timestamp drift
+ignored). The stock display runs, the guard and pending marker are absent,
+global IPv6 is back at its unchanged value of 1, and the final LAN probe
+passed HTTPS, DNS, SSH, Mullvad and Tailscale. The first Tailscale ping after
+each rollback sometimes timed out; a retry succeeded, including on stock-only
+baseline checks. All trial evidence and encrypted archives are ignored private
+files; no router credentials, configuration or identity were committed.
+
+Stage A verifies first installation, live FIPS linking, both interfaces,
+normal IPv4 networking/VPN coexistence, the physical display return, manual
+rollback, and exact stock-state restoration on this firmware. It does not
+verify a confirmed persistent install, guarded upgrade, post-firmware identity
+restoration, LAN gateway operation, a power-loss recovery, or an unreachable-SSH
+physical recovery. Those remain separate hardware gates; the in-use router
+was not deliberately disconnected or reset.
+
+For the proposed persistent Stage B, a focused fake-router test confirms that
+a manual package transaction can be confirmed after elapsed time and a reboot
+without removing the installed packages. The full local suite now passes 155
+Python tests plus shell and Ansible syntax checks. An ignored Stage B profile
+pins the three hardware-trial IPKs with gateway mode off and manual-only package
+recovery. Its offline kit `stageb_persistent_ready_20261001v2` passed integrity,
+candidate, runtime and encrypted-backup verification; the live stock router
+passed the profile's read-only Ansible check mode with zero changes. The owner
+accepted stock operating mode with FIPS packages left installed. No Stage B
+router write or confirmation has been authorized or performed.

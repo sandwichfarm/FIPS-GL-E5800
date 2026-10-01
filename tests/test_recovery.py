@@ -190,6 +190,20 @@ esac
         self.run_guard("arm", "tx1", "manual", "config_only", expected=1)
         self.assertFalse((self.etc / "fips-recovery/pending").exists())
 
+    def test_manual_package_confirmation_retains_install_after_reboot(self) -> None:
+        self.state.write_text("")
+        self.run_guard("arm", "tx1", "manual")
+        self.state.write_text("fips\ngl-sdk4-ui-fips\n")
+        late_and_rebooted = self.env | {
+            "FIPS_TEST_NOW": "999999", "FIPS_TEST_UPTIME": "1",
+            "FIPS_TEST_BOOT_ID": "boot-b",
+        }
+        self.assertIn("CONFIRMED tx1", self.run_guard("confirm", "tx1", env=late_and_rebooted))
+        self.assertEqual(self.run_guard("status", env=late_and_rebooted).strip(), "NONE")
+        self.assertEqual(self.run_guard("check", env=late_and_rebooted), "")
+        self.assertEqual(self.state.read_text(), "fips\ngl-sdk4-ui-fips\n")
+        self.assertEqual((self.etc / "fips-recovery/tx1/result").read_text(), "CONFIRMED tx1\n")
+
     def test_interrupted_install_rolls_back_without_controller(self) -> None:
         self.run_guard("arm", "tx1", "60")
         # Simulate controller loss after removing FIPS and installing only the dashboard.
