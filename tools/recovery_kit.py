@@ -31,6 +31,7 @@ COPIES = (
     "ansible/vars/defaults.yml",
     "upstream/vendor/runtime.json",
     "docs/recovery.md",
+    "docs/hardware-trial.md",
     "docs/firmware.md",
     "packaging/recovery/guard.sh",
     "packaging/recovery/health.sh",

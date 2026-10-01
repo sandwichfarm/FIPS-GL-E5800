@@ -26,7 +26,15 @@ for component in "$@"; do
 done
 
 timeout 2 ubus call system board >/dev/null
-timeout 2 ip -4 route get "$probe_ip" >/dev/null
+route4=$(timeout 2 ip -4 route get "$probe_ip") || fail 'ordinary IPv4 route unavailable'
+[ -n "$route4" ] || fail 'ordinary IPv4 route unavailable'
+case " $route4 " in
+    *' dev fips0 '*) fail 'ordinary IPv4 internet is routed through FIPS';;
+esac
+default6=$(timeout 2 ip -6 route show default) || fail 'IPv6 default route check failed'
+case " $default6 " in
+    *' dev fips0 '*) fail 'ordinary IPv6 internet is routed through FIPS';;
+esac
 timeout 4 ping -c 1 -W 3 "$probe_ip" >/dev/null
 timeout 4 nslookup "$probe_name" >/dev/null
 

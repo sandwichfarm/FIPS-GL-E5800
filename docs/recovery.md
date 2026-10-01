@@ -6,6 +6,8 @@ The stock web and touchscreen applications are proprietary captures, not source
 packages. Do not replay their files across firmware versions. The rollback,
 encrypted backup, and offline-kit paths have local tests; hardware deployment
 remains unapproved and unverified.
+The proposed two-stage owner-approved hardware trial is in
+[hardware-trial.md](hardware-trial.md).
 
 Before requesting a hardware trial, review the rollback against the exact
 predeployment package, configuration, service, and display state. The owner
@@ -369,6 +371,11 @@ configuration when present, and dashboard settings into a verified encrypted
 backup on the controller. The age identity stays outside Git and the offline
 kit. Keep this off-router backup after confirmation: the router-local guard
 automatically rolls back only while its transaction remains pending.
+Before starting the transaction, have a LAN client ready and record its current
+default gateway, DNS resolver, access to an ordinary HTTPS site, and access to
+a resource reached through the existing VPN. Use that same client and those
+same destinations during the rollback deadline. A router-side ping cannot
+substitute for these client checks.
 Only then does it install packages. If selected, it switches the touchscreen
 to the community dashboard while the guard is armed. It checks SSH, `ubus`,
 route, ping, DNS, selected package files, and that the dashboard owns the
@@ -376,7 +383,14 @@ display and its button watcher is running. It also checks web gzip integrity,
 the CGI's rejected-request response, dashboard Python syntax, and in-memory
 Pillow rendering, but **leaves the transaction pending**. Check the
 admin page and physically check the selected touchscreen UI while the guard is
-armed. After those independent checks, confirm from the same local controller:
+armed. Before confirmation, verify on that LAN client that its default gateway
+and DNS resolver are unchanged, the ordinary HTTPS site and VPN resource still
+work, and router administration is reachable. Also verify the FIPS peer link,
+web controls, touchscreen status and return button. If any check fails or the
+deadline is too close, do not confirm: let the router-local deadline roll back
+or request immediate rollback, then compare the encrypted configuration backup
+and package/service inventory against the pretrial captures. After all checks
+pass, confirm from the same local controller:
 
 ```sh
 ansible-playbook ansible/confirm.yml --ask-pass -e @ansible/vars/local.yml -e recovery_transaction=unique_reviewed_id -e interface_health_verified=true
@@ -460,7 +474,9 @@ LAN internet, DNS, VPN and router administration remain available. The command
 preserves peer settings and forces `gateway_enabled: false` in both modes. It
 does not install a FIPS-only default route or reconfigure the normal WAN/VPN.
 The router's confirmation health checks management, routing, internet ping,
-DNS and, when enabling FIPS, the daemon/link. Those router checks cannot prove
+DNS and, when enabling FIPS, the daemon/link. It rejects an ordinary IPv4 probe
+route or IPv6 default route through `fips0`, so the mesh cannot silently become
+the router's internet route. Those router checks cannot prove
 LAN-client or VPN behavior; perform the independent checks before `confirm`.
 
 `prepare` arms a 180-second router-local configuration rollback. If a check
@@ -529,18 +545,22 @@ Ansible tasks resolve those paths from the kit root after the kit is moved.
 From the kit directory, run:
 
 ```sh
+export PYTHONDONTWRITEBYTECODE=1
 python3 tools/verify_recovery_kit.py . --identity /secure/path/gl-e5800-age-key.txt
 ANSIBLE_CONFIG=ansible/ansible.cfg ansible-playbook ansible/deploy.yml --ask-pass --check -e @private/deploy.yml -e recovery_transaction=review1
 ```
 
+Keep this environment setting for all kit-local Python commands: bytecode
+written into the sealed kit would invalidate its manifest on Linux. Put any
+rendered scripts, temporary files and restore rehearsals outside the kit.
 The verifier checks the kit's files, profile, candidate provenance and IPK
 payloads, then decrypts the backup in memory and checks required configuration
 and existing FIPS identity files. Rehearse local restoration into a new private
 directory and compare the staged key/configuration with the intended snapshot:
 
 ```sh
-mkdir -m 0700 -p private/restore-rehearsal
-python3 tools/stage_backup.py private/identity-config-backup.age --identity /secure/path/gl-e5800-age-key.txt --destination private/restore-rehearsal/files --require-fips-identity
+mkdir -m 0700 -p ../restore-rehearsal
+python3 tools/stage_backup.py private/identity-config-backup.age --identity /secure/path/gl-e5800-age-key.txt --destination ../restore-rehearsal/files --require-fips-identity
 ```
 
 The staging tool validates the entire archive before writing plaintext files;

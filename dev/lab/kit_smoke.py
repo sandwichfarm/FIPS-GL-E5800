@@ -39,6 +39,8 @@ def main() -> None:
     cache.mkdir(exist_ok=True)
     kit_id = "synthetic_" + secrets.token_hex(6)
     kit = ROOT / "private/recovery-kits" / kit_id
+    # Kit-local Python CLIs must not leave bytecode outside the signed manifest.
+    kit_environment = os.environ | {"PYTHONDONTWRITEBYTECODE": "1"}
     with tempfile.TemporaryDirectory(prefix="kit-smoke-", dir=cache) as temporary:
         temporary = Path(temporary)
         packages = {}
@@ -110,9 +112,10 @@ def main() -> None:
             if "device_ui" in components:
                 runtime_installer = temporary / "runtime-install.sh"
                 subprocess.run([sys.executable, "tools/offline_runtime.py", "verify", "--root", "."],
-                               cwd=relocated, check=True)
+                               cwd=relocated, env=kit_environment, check=True)
                 subprocess.run([sys.executable, "tools/offline_runtime.py", "render", "--root", ".",
-                                "--output", str(runtime_installer)], cwd=relocated, check=True)
+                                "--output", str(runtime_installer)], cwd=relocated,
+                               env=kit_environment, check=True)
                 subprocess.run(["sh", "-n", str(runtime_installer)], check=True)
             controller_probe = relocated / "ansible/controller-path-probe.yml"
             controller_probe.write_text(
@@ -129,7 +132,7 @@ def main() -> None:
                 "      loop_control:\n"
                 "        loop_var: stack_component\n"
             )
-            probe_environment = os.environ | {
+            probe_environment = kit_environment | {
                 "ANSIBLE_CONFIG": str(relocated / "ansible/ansible.cfg"),
                 "ANSIBLE_LOCAL_TEMP": str(temporary / "ansible-tmp"),
                 "ANSIBLE_REMOTE_TEMP": str(temporary / "ansible-remote"),
@@ -141,7 +144,7 @@ def main() -> None:
             kit_verify = [sys.executable, "tools/verify_recovery_kit.py", "."]
             if identity_path is not None:
                 kit_verify.extend(["--identity", str(identity_path)])
-            subprocess.run(kit_verify, cwd=kit, check=True)
+            subprocess.run(kit_verify, cwd=kit, env=kit_environment, check=True)
             for component in components:
                 filename = EXPECTED[component]
                 installer = temporary / f"{component}-install.sh"
@@ -149,7 +152,7 @@ def main() -> None:
                     [sys.executable, "tools/ipk.py", f"candidate/{filename}",
                      "--sha256", packages[component]["sha256"],
                      "--component", component, "--candidate", "--render", str(installer)],
-                    cwd=kit, check=True,
+                    cwd=kit, env=kit_environment, check=True,
                 )
                 subprocess.run(["sh", "-n", str(installer)], check=True)
             if identity_path is not None:
@@ -165,7 +168,7 @@ def main() -> None:
                         [sys.executable, "tools/render_backup_restore.py",
                          "private/identity-config-backup.age", "--identity", str(identity_path),
                          "--transaction", "synthetic_kit", "--output", str(restore_script)],
-                        cwd=kit, check=True,
+                        cwd=kit, env=kit_environment, check=True,
                     )
                     subprocess.run(["sh", "-n", str(restore_script)], check=True)
             kit_profile = yaml.safe_load((kit / "private/deploy.yml").read_text())
@@ -216,7 +219,7 @@ def main() -> None:
             required.chmod(0o600)
             manifest_path.write_bytes(original_manifest)
             verify(kit, identity_path)
-            environment = os.environ | {
+            environment = kit_environment | {
                 "ANSIBLE_CONFIG": "ansible/ansible.cfg",
                 "ANSIBLE_LOCAL_TEMP": str(temporary / "ansible-tmp"),
             }

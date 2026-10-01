@@ -8,6 +8,11 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import sys
+
+# A sealed kit must remain unchanged when its verifier imports kit-local modules.
+# Linux otherwise writes tools/__pycache__ before verify() checks the manifest.
+sys.dont_write_bytecode = True
 
 import yaml
 
@@ -39,6 +44,7 @@ REQUIRED_KIT_FILES = {
     "ansible/roles/preflight/tasks/main.yml",
     "ansible/roles/prerequisites/tasks/main.yml",
     "ansible/roles/web_ui/tasks/main.yml",
+    "docs/recovery.md", "docs/hardware-trial.md", "docs/firmware.md",
     "packaging/recovery/guard.sh", "packaging/recovery/health.sh",
     "packaging/recovery/apply-initial.sh", "packaging/recovery/cleanup-stock.sh",
     "packaging/recovery/cleanup-bootstrap.sh", "packaging/recovery/cleanup-upgrade.sh",

@@ -33,8 +33,10 @@ class HealthTests(unittest.TestCase):
                                "  case \" $* \" in *' -6 route get '*) exit 1;; esac\n"
                                "fi\n"
                                "if [ \"$name\" = ip ]; then\n"
+                               "  case \" $* \" in *' -4 route get '*)\n"
+                               "    if [ \"${FIPS_IPV4_VIA_MESH:-}\" = yes ]; then echo '1.1.1.1 dev fips0 src 10.0.0.1'; else echo '1.1.1.1 dev wan src 192.0.2.2'; fi; exit 0;; esac\n"
                                "  case \" $* \" in *' -6 route show default '*)\n"
-                               "    [ \"${FIPS_NO_IPV6_DEFAULT:-}\" != yes ] && echo 'default via fe80::1 dev wan6'; exit 0;; esac\n"
+                               "    if [ \"${FIPS_IPV6_VIA_MESH:-}\" = yes ]; then echo 'default dev fips0'; elif [ \"${FIPS_NO_IPV6_DEFAULT:-}\" != yes ]; then echo 'default via fe80::1 dev wan6'; fi; exit 0;; esac\n"
                                "  case \" $* \" in *' -6 -o addr show dev br-lan scope global '*)\n"
                                "    [ \"${FIPS_NO_LAN_IPV6:-}\" != yes ] && echo \"2: br-lan inet6 fd12:3456:789a::1/${FIPS_LAN_PREFIX_LENGTH:-64} scope global\"; exit 0;; esac\n"
                                "  case \" $* \" in *' -6 -o addr show dev br-lan scope link '*)\n"
@@ -201,7 +203,7 @@ print(json.dumps({'status': 'ok', 'data': data}))
         self.assertIn("FIPS node is disabled", result.stderr)
         self.assertNotIn("FIPS_HEALTHY", result.stdout)
         self.assertEqual((self.root / "probes.log").read_text().splitlines(),
-                         ["ubus", "ip", "ping", "nslookup"])
+                         ["ubus", "ip", "ip", "ping", "nslookup"])
 
     def test_ui_package_health_without_fips(self) -> None:
         result = self.run_health("web_ui,device_ui")
@@ -212,9 +214,17 @@ print(json.dumps({'status': 'ok', 'data': data}))
         result = self.run_health("network")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((self.root / "probes.log").read_text().splitlines(),
-                         ["ubus", "ip", "ping", "nslookup"])
+                         ["ubus", "ip", "ip", "ping", "nslookup"])
         failed = self.run_health("network", self.env | {"FIPS_FAIL_PROBE": "nslookup"})
         self.assertNotEqual(failed.returncode, 0)
+
+    def test_ordinary_internet_must_not_use_fips_interface(self) -> None:
+        for variable, family in (("FIPS_IPV4_VIA_MESH", "IPv4"),
+                                 ("FIPS_IPV6_VIA_MESH", "IPv6")):
+            with self.subTest(family=family):
+                result = self.run_health("network", self.env | {variable: "yes"})
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(f"ordinary {family} internet is routed through FIPS", result.stderr)
 
     def test_dns_regression_blocks_confirmation(self) -> None:
         result = self.run_health(env=self.env | {"FIPS_FAIL_PROBE": "nslookup"})

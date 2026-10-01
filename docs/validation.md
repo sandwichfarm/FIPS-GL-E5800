@@ -109,9 +109,11 @@ Gateway mode now adds a one-way IPv6 forwarding from `lan` to `fips_mesh`.
 Local tests show the backend removes this section when gateway mode is disabled
 and confirmation rejects an enabled gateway without it. Return traffic,
 physical LAN clients, and VPN coexistence remain unverified.
-The touchscreen package conflict remains unresolved; a read-only dependency
-inspection playbook has passed syntax and shell checks. A current read-only SSH
-attempt failed authentication, so the post-update router state is unconfirmed.
+At this earlier stage, the touchscreen package conflict was unresolved; a
+read-only dependency inspection playbook had passed syntax and shell checks.
+An SSH attempt before the dedicated key was installed failed authentication.
+The later keyed inventory and pinned offline runtime results below supersede
+those two limitations.
 Deployment health now decompresses the web bundle, executes the CGI's rejected
 GET path, parses the dashboard source, and renders a Pillow frame in memory.
 Local fault tests reject a corrupt gzip bundle, broken CGI response, and
@@ -401,3 +403,28 @@ refuses a lock owned by a live guard operation. `make check` passes 149 Python
 tests plus shell and Ansible syntax checks. The private
 `atomic_bootstrap_ready_20260930` offline kit verifies. A real power cut in
 that narrow interval and the physical cleanup path are untested.
+
+The deployment health probe now rejects ordinary IPv4 traffic or an IPv6
+default route sent through `fips0`. Focused isolated tests cover both failure
+cases. A fresh read-only stock inventory on 2026-09-30 still matched the saved
+firmware, package, service and stock-UI baseline; router IPv4 route, ping and
+DNS probes passed, with no IPv6 default route or LAN router advertisements.
+The candidate FIPS, web and touchscreen IPKs passed checksum/provenance
+verification. This is a predeployment safeguard, not evidence that LAN clients
+or the existing VPN will work after installation; those need an approved
+hardware trial and independent confirmation before the rollback deadline.
+`make check` passes 150 Python tests (one Unix-socket test skipped in the
+earlier restricted execution context), shell syntax and Ansible syntax checks. The new private
+`normal_route_guard_20261001` offline kit verifies with the stock encrypted
+backup. Read-only keyed SSH to the router works again and confirmed GL.iNet
+4.10.0 on 2026-10-01. The deployment guard has not been exercised on hardware.
+The approval-gated sequence and exact client checks are recorded in
+[hardware-trial.md](hardware-trial.md).
+
+The hosted CI run on commit `e34f016` failed in the offline-kit smoke step:
+Ubuntu wrote Python import bytecode into the sealed kit, so a subsequent
+manifest check rejected an unrecorded file. Kit-local Python commands now
+disable bytecode writes, and the verifier disables them for its own imports.
+Both normal and post-firmware identity-restore smoke modes passed locally in
+an Ubuntu 24.04 Docker container with Python 3.12, Ansible and age. The
+corrected commit has not yet been pushed or run in hosted CI.
