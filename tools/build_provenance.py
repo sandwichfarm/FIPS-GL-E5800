@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import platform
 import shutil
 import subprocess
 
@@ -14,7 +15,8 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 BINARIES = ("fips", "fipsctl", "fips-gateway", "fips-router-admin")
 TOOLCHAIN = {"rustc": "1.94.1", "zig": "0.13.0", "cargo-zigbuild": "0.19.8"}
-BUILD_VARIABLES = ("DEV_IMAGE", "PROJECT_MOUNT", "RUST_RUN")
+BUILD_VARIABLES = ("DEV_IMAGE", "BUILD_PLATFORM", "PROJECT_MOUNT", "RUST_RUN")
+BUILDER_ARCH = "aarch64"
 
 
 def digest(path: Path) -> str:
@@ -78,8 +80,9 @@ def current_context() -> dict:
 
 def record_for_bins(binary_dir: Path) -> dict:
     return {
-        "schema": 2,
+        "schema": 3,
         "target": "aarch64-unknown-linux-musl",
+        "builder_arch": BUILDER_ARCH,
         "toolchain": TOOLCHAIN,
         **current_context(),
         "binaries": {name: digest(binary_dir / name) for name in BINARIES},
@@ -87,6 +90,8 @@ def record_for_bins(binary_dir: Path) -> dict:
 
 
 def require_pinned_toolchain() -> None:
+    if platform.system() != "Linux" or platform.machine() != BUILDER_ARCH:
+        raise ValueError("Pinned ARM64 build requires a Linux aarch64 builder")
     if shutil.which("zig") != "/opt/zig/zig":
         raise ValueError("Pinned Zig executable must come from the development image")
     commands = {
@@ -104,12 +109,17 @@ def require_pinned_toolchain() -> None:
 
 def verify_record(record: dict, payload: dict[str, str] | None = None,
                   binary_dir: Path | None = None, current: bool = True) -> None:
-    if not isinstance(record, dict) or set(record) != {
-        "schema", "target", "toolchain", "source", "admin_tree_sha256",
+    expected = {
+        "schema", "target", "builder_arch", "toolchain", "source", "admin_tree_sha256",
         "dockerfile_sha256", "git_shim_sha256", "build_recipe_sha256", "binaries",
-    }:
+    }
+    if not isinstance(record, dict) or not (
+        (record.get("schema") == 3 and set(record) == expected)
+        or (not current and record.get("schema") == 2 and set(record) == expected - {"builder_arch"})
+    ):
         raise ValueError("Missing or malformed FIPS build provenance")
-    if record["schema"] != 2 or record["target"] != "aarch64-unknown-linux-musl" or record["toolchain"] != TOOLCHAIN:
+    if (record["target"] != "aarch64-unknown-linux-musl" or record["toolchain"] != TOOLCHAIN
+            or (record["schema"] == 3 and record["builder_arch"] != BUILDER_ARCH)):
         raise ValueError("FIPS build provenance has an unsupported builder")
     source = record["source"]
     if (not isinstance(source, dict) or set(source) != {"path", "url", "ref", "commit", "license", "tree_sha256"}

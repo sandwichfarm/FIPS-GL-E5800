@@ -18,7 +18,13 @@ make rust-test
 make check
 ```
 
-`dev-image` pins the ARM64 Rust base image and Debian package snapshot. Its
+`dev-image` pins a Linux ARM64 Rust base image and Debian package snapshot.
+The same `linux/arm64` builder platform is used for the OpenWrt binaries on
+macOS and in CI (`ubuntu-24.04-arm`). On an x64 host, Docker needs working
+ARM64 emulation; native ARM64 is preferable for package builds. An x64 Linux
+builder produced different Rust binary bytes despite the same source and
+toolchain versions, so its IPK is not interchangeable with the ARM64 build.
+The build stamp records and enforces the builder architecture. Its
 Dockerfile verifies the Zig 0.13.0 archive checksum and installs pinned
 `cargo-zigbuild` 0.19.8. `web-deps` uses the committed npm lockfile and pinned
 Node 22.16.0 image. Once dependencies exist, `make web-build` rebuilds only the
@@ -148,9 +154,11 @@ the touchscreen scripts must match the reviewed local package sources.
 `make openwrt-build` writes a build stamp from inside the pinned Rust/Zig image.
 `make package-fips` rejects binaries changed since that build, current source
 edits missing from the stamp, or a stamp from another toolchain. The stamp hashes
-only the ARM64 build recipe and its Make variables, so web-only Make edits do
+only the ARM64 build recipe, platform, and its Make variables, so web-only Make edits do
 not force another FIPS cross-build. A host-only
 cross-build is useful for diagnosis but cannot produce an approved FIPS IPK.
+Earlier schema-2 stamps remain readable for offline recovery-kit verification
+but cannot authorize a new package build.
 The tracked `upstream/targets.json` pins the observed web and stock-screen
 hashes used by every package manifest. A reviewed deployment profile must
 match that exact tuple; changing firmware requires new read-only inspection

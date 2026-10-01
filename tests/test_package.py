@@ -34,6 +34,10 @@ class DeterministicPackageTests(unittest.TestCase):
             original,
             build_provenance.build_recipe_digest(makefile.replace("aarch64-unknown-linux-musl", "aarch64-unknown-linux-gnu", 1)),
         )
+        self.assertNotEqual(
+            original,
+            build_provenance.build_recipe_digest(makefile.replace("BUILD_PLATFORM := linux/arm64", "BUILD_PLATFORM := linux/amd64", 1)),
+        )
 
     def test_touchscreen_package_declares_all_runtime_dependencies(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -90,6 +94,30 @@ class DeterministicPackageTests(unittest.TestCase):
             stamp["admin_tree_sha256"] = "0" * 64
             (root / "build.json").write_text(json.dumps(stamp))
             with self.assertRaisesRegex(ValueError, "stale: admin_tree_sha256"):
+                package.build("fips", root, 1788220800)
+
+    def test_other_builder_architecture_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for binary in ("fips", "fipsctl", "fips-gateway", "fips-router-admin"):
+                (root / binary).write_bytes(elf_fixture(binary))
+            stamp = build_provenance.record_for_bins(root)
+            stamp["builder_arch"] = "x86_64"
+            (root / "build.json").write_text(json.dumps(stamp))
+            with self.assertRaisesRegex(ValueError, "unsupported builder"):
+                package.build("fips", root, 1788220800)
+
+    def test_prior_provenance_is_readable_only_offline(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for binary in ("fips", "fipsctl", "fips-gateway", "fips-router-admin"):
+                (root / binary).write_bytes(elf_fixture(binary))
+            stamp = build_provenance.record_for_bins(root)
+            stamp["schema"] = 2
+            del stamp["builder_arch"]
+            build_provenance.verify_record(stamp, binary_dir=root, current=False)
+            (root / "build.json").write_text(json.dumps(stamp))
+            with self.assertRaisesRegex(ValueError, "Missing or malformed"):
                 package.build("fips", root, 1788220800)
 
 

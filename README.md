@@ -42,22 +42,22 @@ decompressed JavaScript is still compiled code, not recovered original source.
 - Source imports and pre/post-upgrade firmware captures are complete.
 - The management backend validates, stages, and activates configuration. It reads a live FIPS
   control socket and excludes private identity data from responses.
-- The web view and touchscreen FIPS panel build locally. The touchscreen package
-  still needs a compatible Pillow dependency package before device installation.
+- The web view and touchscreen FIPS panel build locally and were exercised on
+  the GL-E5800 in temporary Stage A trials.
 - Two real Linux FIPS nodes connected in containers; IPv6 mesh ping and identity
   preservation after an abrupt process crash passed locally.
-- All four ARM64 binaries and three deterministic candidate packages build with
-  the pinned Rust/Zig toolchain. A fresh checkout reproduced package hashes.
-  Router-local rollback passes fake-opkg fault tests. CI/CD and guarded Ansible
-  deployment are authored, with hosted and hardware verification still pending.
+- All four ARM64 binaries and three candidate packages build with the pinned
+  Rust/Zig toolchain. ARM64 is the canonical builder platform. Router-local
+  rollback passed fake-opkg tests and Stage A hardware trials. Persistent
+  deployment and operating-mode switching remain a separate hardware gate.
 - Playwright checks synthetic configuration flows and reads live status, public
   identity, peers, and diagnostics from the two-node lab through the backend.
-- Configuration activation and rollback pass local fake-service tests. Isolated
-  gateway behavior, touchscreen Pillow packaging, a real encrypted backup and
-  on-device verification remain in progress.
-- No package or configuration has been installed on the router by this project.
-- 4.10.0 has been observed; neither community UI nor FIPS has been runtime-tested
-  on the GL-E5800. No recovery profile is approved for installation by default.
+- Configuration activation and rollback pass local fake-service tests. The
+  touchscreen Pillow payload and encrypted stock backups were verified on the
+  GL-E5800; LAN gateway behavior remains unverified on hardware.
+- Temporary Stage A FIPS installs were manually rolled back to stock; no FIPS
+  package or recovery guard remains on the router. The observed firmware is
+  GL.iNet 4.10.0/OpenWrt 23.05.4. Stage B needs fresh owner approval.
 
 Read [recovery instructions](docs/recovery.md) before using the playbooks and
 [firmware observations](docs/firmware.md) for the source availability findings.

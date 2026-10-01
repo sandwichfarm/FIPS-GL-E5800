@@ -582,11 +582,25 @@ was not deliberately disconnected or reset.
 
 For the proposed persistent Stage B, a focused fake-router test confirms that
 a manual package transaction can be confirmed after elapsed time and a reboot
-without removing the installed packages. The full local suite now passes 155
+without removing the installed packages. The full local suite now passes 157
 Python tests plus shell and Ansible syntax checks. An ignored Stage B profile
 pins the three hardware-trial IPKs with gateway mode off and manual-only package
-recovery. Its offline kit `stageb_persistent_ready_20261001v2` passed integrity,
+recovery. Its offline kit `stageb_persistent_ready_20261001v3` passed integrity,
 candidate, runtime and encrypted-backup verification; the live stock router
 passed the profile's read-only Ansible check mode with zero changes. The owner
 accepted stock operating mode with FIPS packages left installed. No Stage B
 router write or confirmation has been authorized or performed.
+
+Cross-builder reproducibility check: hosted CI run
+[`36900519943`](https://github.com/sandwichfarm/FIPS-GL-E5800/actions/runs/36900519943)
+passed but its x64 Linux builder produced FIPS IPK
+`c3f2fc054f80d06faabdf8069215447e9774378157357c3ed723ddf7c98b6ea2`,
+which differs from the Stage-A-tested ARM64-builder IPK
+`082f5febda4f07878116655db6494f8ef69c1add417ccefbd4c2297ff5e1b146`.
+Its web and device IPKs matched. The FIPS manifests had identical source,
+toolchain, target and packaging inputs; all four compiled binaries differed.
+The build is now pinned to a Linux ARM64 builder in Make and hosted CI, and
+provenance schema 3 records that architecture. Rebuilding locally under the
+pinned ARM64 platform reproduced the Stage A FIPS IPK byte for byte. Old
+schema-2 kit stamps are accepted for offline inspection, not a new package
+build. No router write was made for this build-system correction.

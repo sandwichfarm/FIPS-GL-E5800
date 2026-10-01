@@ -1,8 +1,9 @@
 DEV_IMAGE := e5800-dev:0.2.0
+BUILD_PLATFORM := linux/arm64
 NODE_IMAGE := node:22.16.0-bookworm-slim@sha256:048ed02c5fd52e86fda6fbd2f6a76cf0d4492fd6c6fee9e2c463ed5108da0e34
 PLAYWRIGHT_IMAGE := mcr.microsoft.com/playwright:v1.63.0-noble@sha256:eff16c30e6f3f4af0a03fa4b706120d5e9b0891c344a27d64559aff5900a4a27
 PROJECT_MOUNT := -v "$(CURDIR):/workspace" -w /workspace
-RUST_RUN := docker run --rm -e SOURCE_DATE_EPOCH=1788220800 -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/workspace $(PROJECT_MOUNT) -v "$(CURDIR)/.cache/cargo-registry:/usr/local/cargo/registry" $(DEV_IMAGE) sh -c
+RUST_RUN := docker run --rm --platform $(BUILD_PLATFORM) -e SOURCE_DATE_EPOCH=1788220800 -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/workspace $(PROJECT_MOUNT) -v "$(CURDIR)/.cache/cargo-registry:/usr/local/cargo/registry" $(DEV_IMAGE) sh -c
 NODE_RUN := docker run --rm --user "$(shell id -u):$(shell id -g)" -e HOME=/workspace/.cache -e npm_config_cache=/workspace/.cache/npm $(PROJECT_MOUNT) -w /workspace/apps/web-ui $(NODE_IMAGE)
 ANSIBLE_LOCAL_TEMP ?= $(CURDIR)/.cache/ansible-tmp
 export ANSIBLE_LOCAL_TEMP
@@ -40,7 +41,7 @@ capture:
 dashboard: package-device
 
 dev-image:
-	docker build -f dev/Dockerfile -t $(DEV_IMAGE) .
+	docker build --platform $(BUILD_PLATFORM) -f dev/Dockerfile -t $(DEV_IMAGE) .
 
 rust-check:
 	$(RUST_RUN) 'cargo fmt --manifest-path apps/router-admin/Cargo.toml --check && cargo clippy --locked --manifest-path apps/router-admin/Cargo.toml --all-targets -- -D warnings'
