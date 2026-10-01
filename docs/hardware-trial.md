@@ -5,9 +5,10 @@ plan does not authorize deployment, firmware flashing, a reset, or deliberate
 loss of router connectivity. Use [the recovery runbook](recovery.md) for the
 exact backup, rollback, comparison, and rescue commands.
 
-The last successful read-only inventory (2026-09-30) matched GL.iNet 4.10.0,
+The last successful read-only inventory (2026-10-01) matched GL.iNet 4.10.0,
 OpenWrt 23.05.4, `aarch64_cortex-a53`, all installed packages and service
-states, and the stock web and touchscreen fingerprints. Reinspect immediately
+states, and the stock web and touchscreen fingerprints against the 2026-09-30
+baseline. Reinspect immediately
 before a trial; refuse any changed target until it is reviewed. The candidate
 stack is `fips` 0.5.2-1, `gl-sdk4-ui-fips` 0.1.0-1, and
 `gl-e5800-dashboard` 3.2.1-2. Verify all IPKs, provenance, offline runtime,

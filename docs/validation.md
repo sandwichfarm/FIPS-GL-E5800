@@ -426,5 +426,11 @@ Ubuntu wrote Python import bytecode into the sealed kit, so a subsequent
 manifest check rejected an unrecorded file. Kit-local Python commands now
 disable bytecode writes, and the verifier disables them for its own imports.
 Both normal and post-firmware identity-restore smoke modes passed locally in
-an Ubuntu 24.04 Docker container with Python 3.12, Ansible and age. The
-corrected commit has not yet been pushed or run in hosted CI.
+an Ubuntu 24.04 Docker container with Python 3.12, Ansible and age. Hosted
+[CI run 36866823365](https://github.com/sandwichfarm/FIPS-GL-E5800/actions/runs/36866823365)
+passed all steps on commit `4eba2458be39f62294272dce6d15d32a5749f90e`,
+including both recovery-kit smoke modes and upload of the 27,270,505-byte
+`gl-e5800-candidates-4eba2458be39f62294272dce6d15d32a5749f90e`
+artifact. This verifies the hosted build and recovery fixture, not a deployment.
+A fresh read-only inventory on 2026-10-01 matched the 2026-09-30 stock
+baseline for firmware, installed packages, service states, and stock UI files.
